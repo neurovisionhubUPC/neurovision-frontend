@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 
 /**
  * Hook personalizado para manejar la concurrencia del Web Worker.
@@ -7,11 +7,11 @@ import { useEffect, useRef, useCallback } from 'react';
 export const useMediaPipeWorker = (onResults: (results: any) => void) => {
   const workerRef = useRef<Worker | null>(null);
   const isReadyRef = useRef(false);
+  const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
-    // 1. Instanciamos el Worker. Vite soporta la importación de workers usando `?worker` o URLs.
     workerRef.current = new Worker(
-      new URL('../worker/mediapipe.worker.ts', import.meta.url), 
+      new URL('../worker/mediapipe.worker.ts', import.meta.url),
       { type: 'module' }
     );
 
@@ -21,10 +21,11 @@ export const useMediaPipeWorker = (onResults: (results: any) => void) => {
       
       if (type === 'INITIALIZED') {
         isReadyRef.current = true;
+        setIsLoaded(true); // Fuerza un re-render en React para quitar el texto "Cargando"
         console.log("⚡ [React] Web Worker y WASM Inicializados.");
       } else if (type === 'RESULTS') {
-        // Enviar coordenadas JSON a la UI
-        onResults(results);
+        // Enviar TODA la data a la UI (gaze, rawResultsAvailable, landmarkCount)
+        onResults(event.data);
       }
     };
 
@@ -64,6 +65,7 @@ export const useMediaPipeWorker = (onResults: (results: any) => void) => {
 
   return { 
     processVideoFrame, 
-    isReady: () => isReadyRef.current 
+    isReady: () => isReadyRef.current,
+    isLoaded
   };
 };

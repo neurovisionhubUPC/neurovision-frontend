@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useCallback } from 'react';
-import { MedicalPrescription } from '../../../../core/domain/Prescription';
-import { GamePhase } from '../../../../core/store/useAppStore';
+import type { MedicalPrescription } from '../../../../core/domain/Prescription';
+import type { GamePhase } from '../../../../core/store/useAppStore';
 
 export interface Point2D {
   x: number;
@@ -33,7 +33,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   height = 600 
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const requestRef = useRef<number>();
+  const requestRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
   
   // Parámetros Dinámicos desde la Receta Médica
@@ -108,8 +108,8 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
 
   const renderLoop = useCallback((time: number) => {
     const canvas = canvasRef.current;
-    if (!canvas || !ctx) return;
-    var ctx = canvas.getContext('2d');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
     const deltaTime = time - lastTimeRef.current;

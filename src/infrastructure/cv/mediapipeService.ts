@@ -5,11 +5,12 @@
  * deberá ser implementada aquí para aislar la dependencia externa.
  */
 export class MediaPipeService {
-  private isInitialized = false;
+  public isInitialized = false;
 
   async initialize() {
     console.log("Inicializando MediaPipe WASM...");
     this.isInitialized = true;
+    return this.isInitialized;
   }
 
   // Métodos para procesamiento de video, obtención de landmarks, etc.

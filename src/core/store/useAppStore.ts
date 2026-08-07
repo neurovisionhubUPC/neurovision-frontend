@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { MedicalPrescription } from '../domain/Prescription';
+import type { MedicalPrescription } from '../domain/Prescription';
 
 export type GamePhase = 'IDLE' | 'TUTORIAL_CALIBRATION' | 'MAIN_GAME' | 'FINISHED';
 
