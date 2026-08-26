@@ -17,7 +17,7 @@ export const useMediaPipeWorker = (onResults: (results: any) => void) => {
 
     // 2. Escuchamos las respuestas que provienen del hilo secundario (WASM)
     workerRef.current.onmessage = (event: MessageEvent) => {
-      const { type, results } = event.data;
+      const { type } = event.data;
       
       if (type === 'INITIALIZED') {
         isReadyRef.current = true;

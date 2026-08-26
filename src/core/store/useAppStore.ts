@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { MedicalPrescription } from '../domain/Prescription';
 
-export type GamePhase = 'IDLE' | 'TUTORIAL_CALIBRATION' | 'MAIN_GAME' | 'FINISHED';
+export type GamePhase = 'IDLE' | 'TUTORIAL_CALIBRATION' | 'CALIBRATION' | 'MAIN_GAME' | 'FINISHED';
 
 interface AppState {
   hasCompletedOnboarding: boolean;

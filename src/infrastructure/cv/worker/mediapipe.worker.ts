@@ -1,5 +1,4 @@
-import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
-import { computeCompensatedGaze } from './headCompensation';
+import { FaceLandmarker } from '@mediapipe/tasks-vision';
 
 let faceLandmarker: FaceLandmarker | null = null;
 
@@ -35,6 +34,7 @@ async function initializeMediaPipe() {
         delegate: "GPU" // Aceleración por hardware si está disponible
       },
       outputFaceBlendshapes: true,
+      outputFacialTransformationMatrixes: true,
       runningMode: "VIDEO",
       numFaces: 1,
     });
@@ -62,17 +62,39 @@ self.onmessage = async (event: MessageEvent) => {
       // Inferencia Matemática en WASM (No congela la UI porque estamos en background)
       const results = faceLandmarker.detectForVideo(image, timestamp);
       
-      let compensatedData = null;
+      let rawMetrics = null;
       if (results.faceLandmarks && results.faceLandmarks.length > 0) {
-        // Ejecutamos a máxima velocidad (30+ Hz) nuestro algoritmo vectorial
-        compensatedData = computeCompensatedGaze(results.faceLandmarks[0]);
+        const landmarks = results.faceLandmarks[0];
+        
+        // Extracción de pose usando la Matriz de Transformación Facial (col-major 4x4)
+        let yaw = 0;
+        let pitch = 0;
+        let roll = 0;
+        if (results.facialTransformationMatrixes && results.facialTransformationMatrixes.length > 0) {
+          const matrix = results.facialTransformationMatrixes[0].data; 
+          // Extract Euler angles (MediaPipe matrix is column-major)
+          yaw = Math.asin(-matrix[2]);
+          pitch = Math.atan2(matrix[6], matrix[10]);
+          roll = Math.atan2(matrix[1], matrix[0]);
+        }
+        
+        rawMetrics = {
+          pupilL: landmarks[468],
+          pupilR: landmarks[473],
+          corners: {
+            LO: landmarks[33],
+            LI: landmarks[133],
+            RI: landmarks[362],
+            RO: landmarks[263]
+          },
+          headPose: { yaw, pitch, roll }
+        };
       }
       
-      // Enviamos el resultado procesado, omitiendo la enorme malla de landmarks crudos
-      // para reducir el peso de serialización del postMessage y aumentar los FPS.
+      // Enviamos el resultado crudo para que el modelo Zhang & Yin en React lo procese
       self.postMessage({ 
         type: 'RESULTS', 
-        gaze: compensatedData,
+        rawMetrics: rawMetrics,
         rawResultsAvailable: results.faceLandmarks.length > 0,
         landmarkCount: results.faceLandmarks.length > 0 ? results.faceLandmarks[0].length : 0
       });

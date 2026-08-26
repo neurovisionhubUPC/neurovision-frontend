@@ -1,0 +1,91 @@
+import React, { useEffect, useState } from 'react';
+import { useCalibrationStore, CALIBRATION_POINTS } from '../../../../core/store/useCalibrationStore';
+import { processFixationSamples, computeCalibrationData } from '../../../../infrastructure/cv/math/zhangYinModel';
+import { useAppStore } from '../../../../core/store/useAppStore';
+
+export const CalibrationOverlay: React.FC = () => {
+  const { currentPointIndex, rawSamples, nextPoint, processedMetrics, completeCalibration } = useCalibrationStore();
+  const setGamePhase = useAppStore(state => state.setGamePhase);
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    // Si ya completamos los 5 puntos, calculamos la escala
+    if (currentPointIndex >= CALIBRATION_POINTS.length) {
+      if (processedMetrics.length === 5) {
+        const calibData = computeCalibrationData(processedMetrics, CALIBRATION_POINTS);
+        completeCalibration(calibData);
+        setGamePhase('TUTORIAL_CALIBRATION'); // Volvemos al juego
+      }
+      return;
+    }
+
+    // Cada punto dura exactamente 2 segundos.
+    const pointDurationMs = 2000;
+    const interval = 50; // Update progress bar every 50ms
+    let elapsed = 0;
+
+    const timer = setInterval(() => {
+      elapsed += interval;
+      setProgress((elapsed / pointDurationMs) * 100);
+
+      if (elapsed >= pointDurationMs) {
+        clearInterval(timer);
+        // Procesamos la recolección actual desde el getState para evitar stale closures
+        const currentSamples = useCalibrationStore.getState().rawSamples;
+        const result = processFixationSamples(currentSamples);
+        if (result) {
+          nextPoint(result);
+        } else {
+          // Si no hay suficientes samples, obligamos a repetir el punto o lanzamos advertencia.
+          // Por simplicidad en este MVP, pasamos el sample anterior o intentamos de nuevo.
+          console.warn("Muestras insuficientes. Intenta no parpadear ni apartar la mirada.");
+          setProgress(0); // Reinicia el punto
+          useCalibrationStore.setState({ rawSamples: [] });
+        }
+      }
+    }, interval);
+
+    return () => clearInterval(timer);
+  }, [currentPointIndex, rawSamples, processedMetrics, nextPoint, completeCalibration, setGamePhase]);
+
+  if (currentPointIndex >= CALIBRATION_POINTS.length) return null;
+
+  const currentPoint = CALIBRATION_POINTS[currentPointIndex];
+
+  return (
+    <div className="absolute inset-0 bg-hc-black/90 z-40 flex items-center justify-center pointer-events-auto">
+      <div className="text-hc-white absolute top-10 text-center">
+        <h2 className="text-3xl font-bold text-hc-yellow mb-2">Calibración Oculomotora</h2>
+        <p className="text-xl">Mira fijamente el punto rojo central durante 2 segundos.</p>
+        <p className="text-hc-gray mt-2">Punto {currentPointIndex + 1} de 5</p>
+      </div>
+
+      <div 
+        className="absolute w-12 h-12 -ml-6 -mt-6 rounded-full bg-red-600 shadow-[0_0_20px_rgba(220,38,38,0.8)] flex items-center justify-center transition-all duration-300"
+        style={{ 
+          left: `${currentPoint.x * 100}%`, 
+          top: `${currentPoint.y * 100}%` 
+        }}
+      >
+        {/* Anillo de progreso SVG */}
+        <svg className="absolute w-16 h-16 transform -rotate-90">
+          <circle cx="32" cy="32" r="28" stroke="rgba(255,255,255,0.2)" strokeWidth="4" fill="none" />
+          <circle 
+            cx="32" cy="32" r="28" 
+            stroke="#FBBF24" 
+            strokeWidth="4" 
+            fill="none" 
+            strokeDasharray={2 * Math.PI * 28}
+            strokeDashoffset={2 * Math.PI * 28 * (1 - progress / 100)}
+            className="transition-all duration-75"
+          />
+        </svg>
+
+        {/* Temporizador numérico en el centro */}
+        <span className="text-white font-bold text-xs">
+          {progress < 75 ? (2 - (progress / 100) * 2).toFixed(1) + 's' : 'OK'}
+        </span>
+      </div>
+    </div>
+  );
+};
