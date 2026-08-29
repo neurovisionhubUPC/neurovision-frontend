@@ -10,14 +10,14 @@ import { CalibrationOverlay } from '../components/CalibrationOverlay';
 
 export const SeriousGamesPage: React.FC = () => {
   const { videoRef, startWebcam, isStreaming, error } = useWebcam();
-  const { smooth } = useGazeSmoother(0.05, 0.9, 0.08); 
+  const { smooth } = useGazeSmoother(0.05, 0.9, 0.08);
   const gazeRef = useRef({ x: 0.5, y: 0.5 }); // Cursor al centro por defecto
   const frameRequestRef = useRef<number>(0);
   const debugRef = useRef<HTMLPreElement>(null);
 
   const gamePhase = useAppStore(state => state.gamePhase);
   const setGamePhase = useAppStore(state => state.setGamePhase);
-  
+
   // Receta Médica por Defecto (si el usuario entra sin loguearse en un portal médico)
   const prescription = useAppStore(state => state.currentPrescription) || {
     prescriptionId: 'demo',
@@ -31,21 +31,22 @@ export const SeriousGamesPage: React.FC = () => {
   };
 
   const { calibrationData, addSample } = useCalibrationStore();
+  const [heatmapPos, setHeatmapPos] = React.useState({ x: 0.5, y: 0.5 });
 
   const pipCanvasRef = useRef<HTMLCanvasElement>(null);
 
   // 1. Recepción de Coordenadas desde el Worker Cefálico
   const handleWorkerResults = useCallback((results: any) => {
-    
+
     // Dibujar Landmarks en el Canvas PIP (si existe)
     if (pipCanvasRef.current && results && results.rawMetrics) {
       const ctx = pipCanvasRef.current.getContext('2d');
       if (ctx) {
         const { width, height } = pipCanvasRef.current;
         ctx.clearRect(0, 0, width, height);
-        
+
         // Función helper para dibujar un punto
-        const drawPoint = (p: {x: number, y: number}, color: string, radius = 2) => {
+        const drawPoint = (p: { x: number, y: number }, color: string, radius = 2) => {
           ctx.beginPath();
           ctx.arc(p.x * width, p.y * height, radius, 0, 2 * Math.PI);
           ctx.fillStyle = color;
@@ -56,7 +57,7 @@ export const SeriousGamesPage: React.FC = () => {
         // Dibujar pupilas (Rojo)
         drawPoint(metrics.pupilL, '#FF0000', 3);
         drawPoint(metrics.pupilR, '#FF0000', 3);
-        
+
         // Dibujar comisuras (Verde)
         drawPoint(metrics.corners.LI, '#00FF00');
         drawPoint(metrics.corners.LO, '#00FF00');
@@ -64,18 +65,37 @@ export const SeriousGamesPage: React.FC = () => {
         drawPoint(metrics.corners.RO, '#00FF00');
       }
     } else if (pipCanvasRef.current) {
-       const ctx = pipCanvasRef.current.getContext('2d');
-       if (ctx) ctx.clearRect(0, 0, pipCanvasRef.current.width, pipCanvasRef.current.height);
+      const ctx = pipCanvasRef.current.getContext('2d');
+      if (ctx) ctx.clearRect(0, 0, pipCanvasRef.current.width, pipCanvasRef.current.height);
     }
 
     // Modo Calibración: Acumulamos samples puros y actualizamos HUD
     if (useAppStore.getState().gamePhase === 'CALIBRATION') {
       if (results && results.rawMetrics) {
         addSample(results.rawMetrics);
+
+        // --- LÓGICA DE HEATMAP (FEEDBACK VISUAL APROXIMADO DURANTE CALIBRACIÓN) ---
+        // Calculamos un centroide aproximado de la cuenca del ojo para aislar la pupila
+        const leftCenter = { x: (results.rawMetrics.corners.LO.x + results.rawMetrics.corners.LI.x) / 2, y: (results.rawMetrics.corners.LO.y + results.rawMetrics.corners.LI.y) / 2 };
+        const rightCenter = { x: (results.rawMetrics.corners.RO.x + results.rawMetrics.corners.RI.x) / 2, y: (results.rawMetrics.corners.RO.y + results.rawMetrics.corners.RI.y) / 2 };
+
+        const rawPupilL = { x: results.rawMetrics.pupilL.x - leftCenter.x, y: results.rawMetrics.pupilL.y - leftCenter.y };
+        const rawPupilR = { x: results.rawMetrics.pupilR.x - rightCenter.x, y: results.rawMetrics.pupilR.y - rightCenter.y };
+
+        // Mapeo rudimentario solo para que el usuario vea que el ojo se mueve
+        const rawX = 0.5 - ((rawPupilL.x + rawPupilR.x) / 2) * 50.0;
+        const rawY = 0.5 + ((rawPupilL.y + rawPupilR.y) / 2) * 40.0;
+
+        setHeatmapPos({
+          x: smooth({ x: Math.max(0, Math.min(1, rawX)), y: 0 }).x,
+          y: smooth({ x: 0, y: Math.max(0, Math.min(1, rawY)) }).y
+        });
+        // -------------------------------------------------------------------------
+
         if (debugRef.current) {
           debugRef.current.innerText = `STATUS: CALIBRANDO...
 Rostro: Detectado (Landmarks: ${results.landmarkCount || 0})
-Yaw: ${(results.rawMetrics.headPose.yaw * (180/Math.PI)).toFixed(1)}° | Pitch: ${(results.rawMetrics.headPose.pitch * (180/Math.PI)).toFixed(1)}°`;
+Yaw: ${(results.rawMetrics.headPose.yaw * (180 / Math.PI)).toFixed(1)}° | Pitch: ${(results.rawMetrics.headPose.pitch * (180 / Math.PI)).toFixed(1)}°`;
         }
       } else if (results && results.rawResultsAvailable) {
         if (debugRef.current) {
@@ -84,7 +104,7 @@ Landmarks: ${results.landmarkCount || 0}`;
         }
       } else {
         if (debugRef.current) {
-           debugRef.current.innerText = "STATUS: BUSCANDO ROSTRO...\n¡Asegúrate de tener buena luz y mirar a la cámara!";
+          debugRef.current.innerText = "STATUS: BUSCANDO ROSTRO...\n¡Asegúrate de tener buena luz y mirar a la cámara!";
         }
       }
       return;
@@ -94,17 +114,17 @@ Landmarks: ${results.landmarkCount || 0}`;
     if (calibrationData && results && results.rawMetrics) {
       // 1. Predecir mirada combinando pose de cabeza y vectores pupilares
       const predictedGaze = predictGazePoint(results.rawMetrics, calibrationData);
-      
+
       // 2. Filtro Anti-Temblor (Adaptive EMA)
       const smoothed = smooth(predictedGaze);
-      
+
       // 3. Inyectamos al Canvas Directamente (Zero React Lag)
       gazeRef.current = smoothed;
-      
+
       // Actualizamos el HUD de depuración
       if (debugRef.current) {
         debugRef.current.innerText = `STATUS: TRACKING ACTIVO (Zhang & Yin)
-Yaw: ${(results.rawMetrics.headPose.yaw * (180/Math.PI)).toFixed(1)}° | Pitch: ${(results.rawMetrics.headPose.pitch * (180/Math.PI)).toFixed(1)}°
+Yaw: ${(results.rawMetrics.headPose.yaw * (180 / Math.PI)).toFixed(1)}° | Pitch: ${(results.rawMetrics.headPose.pitch * (180 / Math.PI)).toFixed(1)}°
 Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}
 Smooth X: ${smoothed.x.toFixed(3)} | Y: ${smoothed.y.toFixed(3)}`;
       }
@@ -163,32 +183,47 @@ Landmarks: ${results.landmarkCount || 0}`;
       </div>
 
       <div className="absolute bottom-4 right-4 w-48 h-36 z-50">
-        <video 
-          ref={videoRef} 
-          className="w-full h-full rounded-xl border-2 border-hc-gray shadow-lg object-cover opacity-80" 
-          playsInline 
-          muted 
+        <video
+          ref={videoRef}
+          className="w-full h-full rounded-xl border-2 border-hc-gray shadow-lg object-cover opacity-80"
+          playsInline
+          muted
           autoPlay
         />
-        <canvas 
+        <canvas
           ref={pipCanvasRef}
           width={192} // 48 rem = 192px approx
           height={144} // 36 rem = 144px approx
           className="absolute top-0 left-0 w-full h-full rounded-xl pointer-events-none"
         />
       </div>
-      
+
       <div className="absolute bottom-4 left-4 bg-black/80 border border-hc-yellow text-hc-yellow p-4 rounded-xl font-mono text-sm shadow-lg z-50 pointer-events-none">
         <pre ref={debugRef} className="m-0">
           Iniciando telemetría...
         </pre>
       </div>
 
-      {gamePhase === 'CALIBRATION' && <CalibrationOverlay />}
+      {gamePhase === 'CALIBRATION' && (
+        <>
+          <CalibrationOverlay />
+          {/* Heatmap Visualizador en tiempo real de la mirada en bruto */}
+          <div
+            className="absolute w-32 h-32 rounded-full pointer-events-none z-100 bg-white transition-transform duration-75"
+            style={{
+              left: `${heatmapPos.x * 100}%`,
+              top: `${heatmapPos.y * 100}%`,
+              transform: 'translate(-50%, -50%)',
+              background: 'radial-gradient(circle, rgba(139, 92, 246, 0.6) 0%, rgba(139, 92, 246, 0) 70%)',
+              filter: 'blur(8px)'
+            }}
+          />
+        </>
+      )}
 
       {/* Motor Gráfico del Juego */}
-      <div className="w-full max-w-5xl aspect-video relative">
-        <EyeTrackingGameCanvas 
+      <div className="w-full max-w-5xl aspect-video relative z-20">
+        <EyeTrackingGameCanvas
           gazeRef={gazeRef}
           prescription={prescription}
           gamePhase={gamePhase}

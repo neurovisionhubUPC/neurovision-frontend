@@ -33,11 +33,11 @@ export interface CalibrationData {
  * @param samples Colección de métricas capturadas durante los 2 segundos.
  */
 export function processFixationSamples(samples: RawMetrics[]): RawMetrics | null {
-  // Exigimos al menos 4 muestras para garantizar un mínimo de calidad estadística
-  if (samples.length < 4) return null;
+  // Para evitar que el sistema se quede atascado en PCs lentas, aceptaremos incluso 1 muestra.
+  if (samples.length < 1) return null;
 
-  // Descartamos el 75% inicial de las muestras (sacádicos de búsqueda)
-  const discardCount = Math.floor(samples.length * 0.75); 
+  // Descartamos el 75% inicial, pero si solo hay 1 a 3 muestras, conservamos la última.
+  const discardCount = samples.length > 3 ? Math.floor(samples.length * 0.75) : samples.length - 1; 
   const validSamples = samples.slice(discardCount);
   
   const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
