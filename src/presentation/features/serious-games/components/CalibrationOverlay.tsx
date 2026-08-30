@@ -4,14 +4,16 @@ import { processFixationSamples, computeCalibrationData } from '../../../../infr
 import { useAppStore } from '../../../../core/store/useAppStore';
 
 export const CalibrationOverlay: React.FC = () => {
-  const { currentPointIndex, rawSamples, nextPoint, processedMetrics, completeCalibration } = useCalibrationStore();
+  const { currentPointIndex, nextPoint, processedMetrics, completeCalibration, isPreCalibrating } = useCalibrationStore();
   const setGamePhase = useAppStore(state => state.setGamePhase);
   const [progress, setProgress] = useState(0);
 
   useEffect(() => {
-    // Si ya completamos los 5 puntos, calculamos la escala
+    if (isPreCalibrating) return; // Esperar a que el usuario presione el botón
+
+    // Si ya completamos los puntos, calculamos la escala
     if (currentPointIndex >= CALIBRATION_POINTS.length) {
-      if (processedMetrics.length === 5) {
+      if (processedMetrics.length === CALIBRATION_POINTS.length) {
         const calibData = computeCalibrationData(processedMetrics, CALIBRATION_POINTS);
         completeCalibration(calibData);
         setGamePhase('TUTORIAL_CALIBRATION'); // Volvemos al juego
@@ -46,9 +48,10 @@ export const CalibrationOverlay: React.FC = () => {
     }, interval);
 
     return () => clearInterval(timer);
-  }, [currentPointIndex, rawSamples, processedMetrics, nextPoint, completeCalibration, setGamePhase]);
+  }, [currentPointIndex, processedMetrics, nextPoint, completeCalibration, setGamePhase, isPreCalibrating]);
 
   if (currentPointIndex >= CALIBRATION_POINTS.length) return null;
+  if (isPreCalibrating) return null; // No mostrar puntos aún
 
   const currentPoint = CALIBRATION_POINTS[currentPointIndex];
 

@@ -30,7 +30,7 @@ export const SeriousGamesPage: React.FC = () => {
     }
   };
 
-  const { calibrationData, addSample } = useCalibrationStore();
+  const { calibrationData, addSample, isPreCalibrating } = useCalibrationStore();
   const [heatmapPos, setHeatmapPos] = React.useState({ x: 0.5, y: 0.5 });
 
   const pipCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -182,22 +182,48 @@ Landmarks: ${results.landmarkCount || 0}`;
         {error && <span className="text-red-500">{error}</span>}
       </div>
 
-      <div className="absolute bottom-4 right-4 w-48 h-36 z-50">
-        <video
-          ref={videoRef}
-          className="w-full h-full rounded-xl border-2 border-hc-gray shadow-lg object-cover opacity-80"
-          playsInline
-          muted
-          autoPlay
-        />
-        <canvas
-          ref={pipCanvasRef}
-          width={192} // 48 rem = 192px approx
-          height={144} // 36 rem = 144px approx
-          className="absolute top-0 left-0 w-full h-full rounded-xl pointer-events-none"
-        />
+      {/* Feed de la Webcam (Centrado en Pre-Calibración, PIP en el resto) */}
+      <div className={`z-50 transition-all duration-500 flex flex-col items-center ${
+        isPreCalibrating 
+        ? "absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"
+        : "absolute bottom-4 right-4"
+      }`}>
+        <div className={`relative ${isPreCalibrating ? "w-[640px] h-[480px]" : "w-48 h-36"}`}>
+          <video 
+            ref={videoRef} 
+            className="w-full h-full rounded-xl border-4 border-hc-gray shadow-2xl object-cover opacity-90" 
+            playsInline 
+            muted 
+            autoPlay
+          />
+          <canvas 
+            ref={pipCanvasRef}
+            width={isPreCalibrating ? 640 : 192}
+            height={isPreCalibrating ? 480 : 144}
+            className="absolute top-0 left-0 w-full h-full rounded-xl pointer-events-none"
+          />
+          {/* Silueta Guía (Solo en Pre-Calibración) */}
+          {isPreCalibrating && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className="w-[300px] h-[400px] border-4 border-dashed border-hc-yellow/50 rounded-[100px] flex items-center justify-center">
+                <span className="absolute bottom-8 text-hc-yellow font-bold text-center bg-black/50 px-4 py-2 rounded-lg">
+                  Centra tu rostro aquí
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+        
+        {isPreCalibrating && (
+          <button 
+            onClick={() => useCalibrationStore.getState().startCalibration()}
+            className="mt-6 px-8 py-4 bg-hc-yellow text-hc-black font-bold text-xl rounded-full shadow-[0_0_20px_rgba(251,191,36,0.5)] hover:bg-yellow-400 hover:scale-105 transition-all"
+          >
+            Iniciar Calibración
+          </button>
+        )}
       </div>
-
+      
       <div className="absolute bottom-4 left-4 bg-black/80 border border-hc-yellow text-hc-yellow p-4 rounded-xl font-mono text-sm shadow-lg z-50 pointer-events-none">
         <pre ref={debugRef} className="m-0">
           Iniciando telemetría...

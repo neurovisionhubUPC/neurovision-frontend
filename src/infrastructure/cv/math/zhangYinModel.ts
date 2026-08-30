@@ -14,17 +14,15 @@ export interface RawMetrics {
 }
 
 export interface CalibrationData {
-  Ls: Point2D; // Escala ojo izquierdo
-  Rs: Point2D; // Escala ojo derecho
-  theta0: number; // Yaw inicial (radianes)
-  beta0: number;  // Pitch inicial (radianes)
-  Lc: Point2D; // Benchmark pupila izquierda (raw coords)
-  Rc: Point2D; // Benchmark pupila derecha (raw coords)
+  Ls: Point2D; // Coeficientes de escala Izquierdo
+  Rs: Point2D; // Coeficientes de escala Derecho
+  theta0: number; // Yaw base (C1)
+  beta0: number;  // Pitch base (C1)
+  IPD0: number;   // Inter-Pupillary Distance base (C1)
+  Lc: Point2D; // Benchmark del centro ojo Izquierdo
+  Rc: Point2D; // Benchmark del centro ojo Derecho
   cornersBenchmark: {
-    LI: Point2D;
-    LO: Point2D;
-    RI: Point2D;
-    RO: Point2D;
+    LI: Point2D; LO: Point2D; RI: Point2D; RO: Point2D;
   };
 }
 
@@ -75,18 +73,42 @@ export function processFixationSamples(samples: RawMetrics[]): RawMetrics | null
  */
 export function computeCalibrationData(calibMetrics: RawMetrics[], screenPoints: Point2D[]): CalibrationData {
   const [c1, c2, c3, c4, c5] = calibMetrics;
-  const [, p2, p3, p4, p5] = screenPoints; // p1 = Centro (omitido, no se usa en Ls/Rs directo)
+  const [, p2, p3, p4, p5] = screenPoints; 
 
-  // Cálculo de Escala (Ls y Rs) según Zhang & Yin (2025)
-  // Escala = Delta Pantalla / Delta Pupila
+  // Utilidad para extraer la posición relativa de la pupila (aislando el movimiento de la cabeza)
+  const getRelL = (m: RawMetrics) => ({
+    x: m.pupilL.x - (m.corners.LO.x + m.corners.LI.x) / 2,
+    y: m.pupilL.y - (m.corners.LO.y + m.corners.LI.y) / 2
+  });
   
-  // Ojo Izquierdo
-  const LsX = (p5.x - p3.x) / (c5.pupilL.x - c3.pupilL.x);
-  const LsY = (p4.y - p2.y) / (c4.pupilL.y - c2.pupilL.y);
+  const getRelR = (m: RawMetrics) => ({
+    x: m.pupilR.x - (m.corners.RO.x + m.corners.RI.x) / 2,
+    y: m.pupilR.y - (m.corners.RO.y + m.corners.RI.y) / 2
+  });
 
-  // Ojo Derecho
-  const RsX = (p5.x - p3.x) / (c5.pupilR.x - c3.pupilR.x);
-  const RsY = (p4.y - p2.y) / (c4.pupilR.y - c2.pupilR.y);
+  const relL2 = getRelL(c2), relL3 = getRelL(c3), relL4 = getRelL(c4), relL5 = getRelL(c5);
+  const relR2 = getRelR(c2), relR3 = getRelR(c3), relR4 = getRelR(c4), relR5 = getRelR(c5);
+
+  // Cálculo de Escala (Ls y Rs) según Zhang & Yin
+  let LsX = (p5.x - p3.x) / (relL5.x - relL3.x);
+  let LsY = (p4.y - p2.y) / (relL4.y - relL2.y);
+
+  let RsX = (p5.x - p3.x) / (relR5.x - relR3.x);
+  let RsY = (p4.y - p2.y) / (relR4.y - relR2.y);
+
+  // Sanitización de Coeficientes
+  // Aumentamos el máximo a 500 para pantallas pequeñas (13") donde el ojo se mueve poquísimo.
+  const clamp = (val: number, min = 10, max = 500) => {
+    if (isNaN(val) || !isFinite(val)) return 50; 
+    return Math.max(min, Math.min(max, Math.abs(val))) * Math.sign(val);
+  };
+
+  LsX = clamp(LsX);
+  LsY = clamp(LsY);
+  RsX = clamp(RsX);
+  RsY = clamp(RsY);
+
+  const IPD0 = Math.hypot(c1.pupilR.x - c1.pupilL.x, c1.pupilR.y - c1.pupilL.y);
 
   // Benchmarks del Centro (Punto 1)
   return {
@@ -94,6 +116,7 @@ export function computeCalibrationData(calibMetrics: RawMetrics[], screenPoints:
     Rs: { x: RsX, y: RsY },
     theta0: c1.headPose.yaw,
     beta0: c1.headPose.pitch,
+    IPD0: IPD0,
     Lc: { x: c1.pupilL.x, y: c1.pupilL.y },
     Rc: { x: c1.pupilR.x, y: c1.pupilR.y },
     cornersBenchmark: {
@@ -127,19 +150,25 @@ export function predictGazePoint(currentMetrics: RawMetrics, calib: CalibrationD
   const { yaw: thetaAct, pitch: betaAct } = currentMetrics.headPose;
   
   // Umbral de 2 grados (en radianes: 2 * Math.PI / 180 = ~0.0349)
-  const threshold = 2 * (Math.PI / 180);
-  const deltaTheta = Math.abs(thetaAct - lastTheta);
-  const deltaBeta = Math.abs(betaAct - lastBeta);
+  const threshold = (2 * Math.PI) / 180;
+  const deltaYaw = Math.abs(thetaAct - lastTheta);
+  const deltaPitch = Math.abs(betaAct - lastBeta);
   
-  const isHeadMotion = deltaTheta > threshold || deltaBeta > threshold;
+  // Constante de proyección (ahora dinámica basada en la profundidad IPD)
+  const IPD_act = Math.hypot(currentMetrics.pupilR.x - currentMetrics.pupilL.x, currentMetrics.pupilR.y - currentMetrics.pupilL.y);
+  const IPD_ratio = calib.IPD0 / (IPD_act || 0.0001); // Evitar div 0
+  const d_act = 2.0 * IPD_ratio; 
   
-  // Factor empírico de proyección angular a la pantalla
-  const d_norm = 2.0; 
-
-  if (isHeadMotion) {
+  let dx = 0, dy = 0;
+  
+  if (deltaYaw > threshold || deltaPitch > threshold) {
     // Paso B: Cálculo del Head-Pointing
-    const dx = d_norm * (Math.tan(thetaAct) - Math.tan(calib.theta0));
-    const dy = d_norm * (Math.tan(betaAct) - Math.tan(calib.beta0));
+    if (Math.abs(deltaYaw) > threshold) {
+        dx = d_act * (Math.tan(thetaAct) - Math.tan(calib.theta0));
+    }
+    if (Math.abs(deltaPitch) > threshold) {
+        dy = d_act * (Math.tan(betaAct) - Math.tan(calib.beta0));
+    }
     
     // O(x,y) = Centro de pantalla = 0.5
     // En screen coords, yaw positivo -> mirada a la derecha (x aumenta)
