@@ -1,6 +1,12 @@
 @import "tailwindcss";
 
 @theme {
+  --color-primary: #1C2A39;
+  --color-secondary: #26A69A;
+  --color-tertiary: #F4A261;
+  --color-neutral: #455A64;
+  --color-bgMain: #F3FAFF;
+  --color-bgSecondary: #E6F6FF;
   --color-hc-black: #000000;
   --color-hc-white: #FFFFFF;
   --color-hc-yellow: #FFFF00;
@@ -9,7 +15,7 @@
 
 @layer base {
   body {
-    @apply bg-hc-black text-hc-white font-sans antialiased;
+    @apply font-sans antialiased bg-bgMain text-primary;
   }
 
   /* Outline for keyboard accessibility */

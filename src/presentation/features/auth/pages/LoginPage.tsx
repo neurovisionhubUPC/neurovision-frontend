@@ -21,9 +21,9 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
       {/* Columna Izquierda - Imagen */}
       <div className="hidden lg:flex lg:w-[45%] p-4 pl-4 pr-0">
         <div className="w-full h-full relative rounded-xl overflow-hidden border-2 border-white/20">
-          <img 
-            src={loginImage} 
-            alt="NeuroVision abstract" 
+          <img
+            src={loginImage}
+            alt="NeuroVision abstract"
             className="w-full h-full object-cover"
           />
         </div>
