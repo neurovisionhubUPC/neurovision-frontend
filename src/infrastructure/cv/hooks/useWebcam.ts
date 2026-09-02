@@ -9,9 +9,9 @@ import { useRef, useState, useCallback, useEffect } from 'react';
 // Restringimos explícitamente el audio por privacidad y solicitamos resolución óptima para CV.
 const STRICT_VIDEO_CONSTRAINTS: MediaStreamConstraints = {
   video: {
-    width: { ideal: 1280 },
-    height: { ideal: 720 },
-    facingMode: 'user', // Forzamos cámara frontal
+    width: { ideal: 2560 }, // Solicitamos 1440p (2K) o superior si está disponible
+    height: { ideal: 1440 },
+    facingMode: 'user',
   },
   audio: false, // Validación crucial: el sistema NUNCA solicita ni graba audio.
 };

@@ -7,6 +7,12 @@ export default {
   theme: {
     extend: {
       colors: {
+        primary: '#1C2A39',
+        secondary: '#26A69A',
+        tertiary: '#F4A261',
+        neutral: '#455A64',
+        bgMain: '#F3FAFF',
+        bgSecondary: '#E6F6FF',
         hc: {
           black: '#000000',
           white: '#FFFFFF',
