@@ -1,25 +1,16 @@
-import React, { useState } from 'react';
+import React from 'react';
 import loginImage from '../../../../assets/login-image.png';
+import type { UserRole } from '../../../../core/store/useAppStore';
 
 interface LoginPageProps {
-  onLoginSuccess: () => void;
+  onLoginSuccess: (role: UserRole) => void;
 }
 
 export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    // TODO: Implement actual authentication logic here
-    console.log('Logging in with', email, password);
-    onLoginSuccess();
-  };
-
   return (
-    <div className="min-h-screen flex bg-bgMain font-sans">
+    <div className="h-screen overflow-hidden flex bg-bgMain font-sans">
       {/* Columna Izquierda - Imagen */}
-      <div className="hidden lg:flex lg:w-[45%] p-4 pl-4 pr-0">
+      <div className="hidden lg:flex lg:w-[45%] p-4 pl-4 pr-0 h-full">
         <div className="w-full h-full relative rounded-xl overflow-hidden border-2 border-white/20">
           <img
             src={loginImage}
@@ -30,67 +21,35 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
       </div>
 
       {/* Columna Derecha - Formulario */}
-      <div className="w-full lg:w-[55%] flex items-center justify-center p-8 sm:p-12 lg:p-24 bg-bgMain">
-        <div className="w-full max-w-md">
+      <div className="w-full lg:w-[55%] flex items-center justify-center p-8 sm:p-12 lg:p-24 bg-bgMain h-full">
+        <div className="w-full max-w-md flex flex-col justify-center">
           <h1 className="text-[2.5rem] font-bold text-primary mb-3 leading-tight tracking-tight">
             Bienvenido a<br />NeuroVisión Rehab
           </h1>
-          <p className="text-neutral mb-10 text-base">
-            Por favor, ingrese sus credenciales para continuar.
+          <p className="text-neutral mb-12 text-base">
+            Seleccione el rol con el que desea ingresar a la plataforma (Mock Mode).
           </p>
 
-          <form onSubmit={handleLogin} className="space-y-6">
-            <div>
-              <label className="block text-sm font-bold text-primary mb-2">
-                Correo Electrónico
-              </label>
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="ejemplo@correo.com"
-                className="w-full px-4 py-3 border-2 border-neutral/20 rounded focus:outline-none focus:border-secondary focus:ring-0 text-primary placeholder-neutral/50 bg-white"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-bold text-primary mb-2">
-                Contraseña
-              </label>
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full px-4 py-3 border-2 border-neutral/20 rounded focus:outline-none focus:border-secondary focus:ring-0 text-primary placeholder-neutral/50 bg-white"
-              />
-            </div>
-
-            <div className="flex items-center">
-              <input
-                type="checkbox"
-                id="remember"
-                className="w-5 h-5 border-2 border-neutral/40 text-primary accent-primary rounded cursor-pointer"
-              />
-              <label htmlFor="remember" className="ml-3 text-sm text-primary cursor-pointer">
-                Recordarme
-              </label>
-            </div>
+          <div className="space-y-6">
+            <button
+              onClick={() => onLoginSuccess('PATIENT')}
+              className="w-full py-5 bg-secondary text-white font-bold rounded-xl shadow-md hover:bg-[#1E8A80] transition-colors flex items-center justify-center space-x-3 text-lg"
+            >
+              <span>Vista de Paciente</span>
+            </button>
 
             <button
-              type="submit"
-              className="w-full py-4 bg-secondary text-white font-bold rounded shadow-md hover:bg-[#1E8A80] transition-colors mt-2"
+              onClick={() => onLoginSuccess('SPECIALIST')}
+              className="w-full py-5 bg-primary text-white font-bold rounded-xl shadow-md hover:bg-[#131f2b] transition-colors flex items-center justify-center space-x-3 text-lg"
             >
-              INICIAR SESIÓN
+              <span>Vista de Especialista</span>
             </button>
-          </form>
+          </div>
 
-          <div className="mt-10 text-center">
-            <a href="#" className="text-primary font-bold text-sm underline hover:text-secondary transition-colors underline-offset-4">
-              ¿Olvidó su contraseña?
-            </a>
+          <div className="mt-12 text-center">
+            <span className="text-neutral/70 text-sm italic">
+              El backend está temporalmente deshabilitado.
+            </span>
           </div>
         </div>
       </div>

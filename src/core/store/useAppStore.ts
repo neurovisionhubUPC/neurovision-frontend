@@ -3,14 +3,16 @@ import { persist } from 'zustand/middleware';
 import type { MedicalPrescription } from '../domain/Prescription';
 
 export type GamePhase = 'IDLE' | 'TUTORIAL_CALIBRATION' | 'CALIBRATION' | 'MAIN_GAME' | 'FINISHED';
+export type UserRole = 'PATIENT' | 'SPECIALIST' | null;
 
 interface AppState {
   isAuthenticated: boolean;
+  userRole: UserRole;
   hasCompletedOnboarding: boolean;
   currentPrescription: MedicalPrescription | null;
   gamePhase: GamePhase;
   
-  login: () => void;
+  login: (role: UserRole) => void;
   logout: () => void;
   completeOnboarding: () => void;
   setHasCompletedOnboarding: (status: boolean) => void;
@@ -22,12 +24,13 @@ export const useAppStore = create<AppState>()(
   persist(
     (set) => ({
       isAuthenticated: false,
+      userRole: null,
       hasCompletedOnboarding: false,
       currentPrescription: null,
       gamePhase: 'IDLE',
       
-      login: () => set({ isAuthenticated: true }),
-      logout: () => set({ isAuthenticated: false, gamePhase: 'IDLE' }),
+      login: (role) => set({ isAuthenticated: true, userRole: role }),
+      logout: () => set({ isAuthenticated: false, userRole: null, gamePhase: 'IDLE' }),
       completeOnboarding: () => set({ hasCompletedOnboarding: true }),
       setHasCompletedOnboarding: (status) => set({ hasCompletedOnboarding: status }),
       setPrescription: (prescription) => set({ currentPrescription: prescription }),
