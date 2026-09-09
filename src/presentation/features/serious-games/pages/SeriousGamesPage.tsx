@@ -72,7 +72,12 @@ export const SeriousGamesPage: React.FC = () => {
     // Modo Calibración: Acumulamos samples puros y actualizamos HUD
     if (useAppStore.getState().gamePhase === 'CALIBRATION') {
       if (results && results.rawMetrics) {
-        addSample(results.rawMetrics);
+        const isBlinking = results.rawMetrics.ear?.isBlinking;
+
+        // Solo acumulamos si el ojo está abierto (Filtro EAR anti-parpadeo)
+        if (!isBlinking) {
+          addSample(results.rawMetrics);
+        }
 
         // --- LÓGICA DE HEATMAP (FEEDBACK VISUAL APROXIMADO DURANTE CALIBRACIÓN) ---
         // Calculamos un centroide aproximado de la cuenca del ojo para aislar la pupila
@@ -86,15 +91,18 @@ export const SeriousGamesPage: React.FC = () => {
         const rawX = 0.5 - ((rawPupilL.x + rawPupilR.x) / 2) * 50.0;
         const rawY = 0.5 + ((rawPupilL.y + rawPupilR.y) / 2) * 40.0;
 
-        setHeatmapPos({
-          x: smooth({ x: Math.max(0, Math.min(1, rawX)), y: 0 }).x,
-          y: smooth({ x: 0, y: Math.max(0, Math.min(1, rawY)) }).y
-        });
+        if (!isBlinking) {
+          setHeatmapPos({
+            x: smooth({ x: Math.max(0, Math.min(1, rawX)), y: 0 }).x,
+            y: smooth({ x: 0, y: Math.max(0, Math.min(1, rawY)) }).y
+          });
+        }
         // -------------------------------------------------------------------------
 
         if (debugRef.current) {
-          debugRef.current.innerText = `STATUS: CALIBRANDO...
+          debugRef.current.innerText = `STATUS: CALIBRANDO... ${isBlinking ? '👁️ [PARPADEO DETECTADO - Muestra omitida]' : ''}
 Rostro: Detectado (Landmarks: ${results.landmarkCount || 0})
+EAR: ${results.rawMetrics.ear ? results.rawMetrics.ear.avg.toFixed(3) : 'N/A'}
 Yaw: ${(results.rawMetrics.headPose.yaw * (180 / Math.PI)).toFixed(1)}° | Pitch: ${(results.rawMetrics.headPose.pitch * (180 / Math.PI)).toFixed(1)}°`;
         }
       } else if (results && results.rawResultsAvailable) {
@@ -110,20 +118,35 @@ Landmarks: ${results.landmarkCount || 0}`;
       return;
     }
 
-    // Modo Juego (Tracking): Usamos el motor de Zhang & Yin
+    // Modo Juego (Tracking): Usamos el motor de Zhang & Yin + Compensación Glabela
     if (calibrationData && results && results.rawMetrics) {
-      // 1. Predecir mirada combinando pose de cabeza y vectores pupilares
+      // 1. Filtrado Anti-Parpadeo (EAR < 0.20): Si parpadea, congelamos el cursor para evitar saltos bruscos
+      if (results.rawMetrics.ear?.isBlinking) {
+        if (debugRef.current) {
+          debugRef.current.innerText = `STATUS: TRACKING ACTIVO (👁️ Parpadeo - Cursor protegido)
+EAR: ${results.rawMetrics.ear.avg.toFixed(3)} (Umbral: < 0.20)
+Yaw: ${(results.rawMetrics.headPose.yaw * (180 / Math.PI)).toFixed(1)}° | Pitch: ${(results.rawMetrics.headPose.pitch * (180 / Math.PI)).toFixed(1)}°`;
+        }
+        return;
+      }
+
+      // 2. Predecir mirada combinando pose de cabeza, vectores pupilares y anclaje en glabela
       const predictedGaze = predictGazePoint(results.rawMetrics, calibrationData);
 
-      // 2. Filtro Anti-Temblor (Adaptive EMA)
+      // 3. Filtro Anti-Temblor (Adaptive EMA)
       const smoothed = smooth(predictedGaze);
 
-      // 3. Inyectamos al Canvas Directamente (Zero React Lag)
+      // 4. Inyectamos al Canvas Directamente (Zero React Lag)
       gazeRef.current = smoothed;
 
       // Actualizamos el HUD de depuración
       if (debugRef.current) {
-        debugRef.current.innerText = `STATUS: TRACKING ACTIVO (Zhang & Yin)
+        const r2X = calibrationData.leftModel?.r2X ? (calibrationData.leftModel.r2X * 100).toFixed(0) : 'N/A';
+        const r2Y = calibrationData.leftModel?.r2Y ? (calibrationData.leftModel.r2Y * 100).toFixed(0) : 'N/A';
+
+        debugRef.current.innerText = `STATUS: TRACKING ACTIVO (9 Pts OLS + Z-Recalib)
+Fidelidad Calibración: R² X: ${r2X}% | R² Y: ${r2Y}%
+EAR: ${results.rawMetrics.ear ? results.rawMetrics.ear.avg.toFixed(3) : 'N/A'}
 Yaw: ${(results.rawMetrics.headPose.yaw * (180 / Math.PI)).toFixed(1)}° | Pitch: ${(results.rawMetrics.headPose.pitch * (180 / Math.PI)).toFixed(1)}°
 Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}
 Smooth X: ${smoothed.x.toFixed(3)} | Y: ${smoothed.y.toFixed(3)}`;

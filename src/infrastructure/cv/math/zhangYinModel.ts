@@ -1,3 +1,10 @@
+import { 
+  applyGlabellaCompensation, 
+  fitLinearRegression, 
+  applyZIndexRecalibration,
+  type DecoupledModel 
+} from './gazeEnhancements';
+
 export interface Point2D { x: number; y: number; }
 export interface Point3D { x: number; y: number; z: number; }
 
@@ -10,15 +17,27 @@ export interface RawMetrics {
     RI: Point3D; // Right Inner
     RO: Point3D; // Right Outer
   };
+  glabella?: Point3D;
+  irisDiameter?: number;
+  ear?: {
+    left: number;
+    right: number;
+    avg: number;
+    isBlinking: boolean;
+  };
   headPose: { yaw: number; pitch: number; roll: number; };
 }
 
 export interface CalibrationData {
   Ls: Point2D; // Coeficientes de escala Izquierdo
   Rs: Point2D; // Coeficientes de escala Derecho
+  leftModel?: DecoupledModel; // Modelo desacoplado X/Y ojo izquierdo
+  rightModel?: DecoupledModel; // Modelo desacoplado X/Y ojo derecho
   theta0: number; // Yaw base (C1)
   beta0: number;  // Pitch base (C1)
   IPD0: number;   // Inter-Pupillary Distance base (C1)
+  baselineGlabella?: Point2D; // Glabela base (C1 - Chhimpa et al., 2024)
+  baselineIrisDiameter?: number; // Diámetro medio del iris base (C1)
   Lc: Point2D; // Benchmark del centro ojo Izquierdo
   Rc: Point2D; // Benchmark del centro ojo Derecho
   cornersBenchmark: {
@@ -31,14 +50,27 @@ export interface CalibrationData {
  * @param samples Colección de métricas capturadas durante los 2 segundos.
  */
 export function processFixationSamples(samples: RawMetrics[]): RawMetrics | null {
-  // Para evitar que el sistema se quede atascado en PCs lentas, aceptaremos incluso 1 muestra.
   if (samples.length < 1) return null;
 
-  // Descartamos el 75% inicial, pero si solo hay 1 a 3 muestras, conservamos la última.
-  const discardCount = samples.length > 3 ? Math.floor(samples.length * 0.75) : samples.length - 1; 
-  const validSamples = samples.slice(discardCount);
+  // 1. Filtrado de parpadeos: Descartar muestras corruptas por cierre palpebral (EAR < 0.20)
+  const nonBlinking = samples.filter(s => !s.ear?.isBlinking);
+  const candidateSamples = nonBlinking.length > 0 ? nonBlinking : samples;
+
+  // 2. Descarte de latencia inicial: conservar el último 25% (o última muestra si hay pocas)
+  const discardCount = candidateSamples.length > 3 ? Math.floor(candidateSamples.length * 0.75) : candidateSamples.length - 1; 
+  const validSamples = candidateSamples.slice(discardCount);
   
   const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
+
+  const glabellaSamples = validSamples.filter(s => s.glabella);
+  const avgGlabella = glabellaSamples.length > 0 ? {
+    x: avg(glabellaSamples.map(s => s.glabella!.x)),
+    y: avg(glabellaSamples.map(s => s.glabella!.y)),
+    z: avg(glabellaSamples.map(s => s.glabella!.z))
+  } : undefined;
+
+  const irisSamples = validSamples.filter(s => typeof s.irisDiameter === 'number');
+  const avgIrisDiameter = irisSamples.length > 0 ? avg(irisSamples.map(s => s.irisDiameter!)) : undefined;
 
   return {
     pupilL: {
@@ -57,6 +89,8 @@ export function processFixationSamples(samples: RawMetrics[]): RawMetrics | null
       RI: { x: avg(validSamples.map(s => s.corners.RI.x)), y: avg(validSamples.map(s => s.corners.RI.y)), z: 0 },
       RO: { x: avg(validSamples.map(s => s.corners.RO.x)), y: avg(validSamples.map(s => s.corners.RO.y)), z: 0 },
     },
+    glabella: avgGlabella,
+    irisDiameter: avgIrisDiameter,
     headPose: {
       yaw: avg(validSamples.map(s => s.headPose.yaw)),
       pitch: avg(validSamples.map(s => s.headPose.pitch)),
@@ -66,14 +100,13 @@ export function processFixationSamples(samples: RawMetrics[]): RawMetrics | null
 }
 
 /**
- * Calcula los coeficientes de escala a partir de los 5 puntos estandarizados.
- * C1=Centro, C2=Arriba, C3=Izq, C4=Abajo, C5=Der.
- * @param calibMetrics Array ordenado de 5 métricas procesadas (C1 a C5).
+ * Calcula los coeficientes de escala y el modelo desacoplado X / Y (Chhimpa et al., 2024; Zhang & Yin, 2025)
+ * a partir de los 9 puntos estandarizados de calibración (Centro, 4 bordes cardinales, 4 esquinas).
+ * @param calibMetrics Array de métricas procesadas (hasta 9 puntos).
  * @param screenPoints Puntos de la pantalla en espacio normalizado [0, 1].
  */
 export function computeCalibrationData(calibMetrics: RawMetrics[], screenPoints: Point2D[]): CalibrationData {
-  const [c1, c2, c3, c4, c5] = calibMetrics;
-  const [, p2, p3, p4, p5] = screenPoints; 
+  const c1 = calibMetrics[0];
 
   // Utilidad para extraer la posición relativa de la pupila (aislando el movimiento de la cabeza)
   const getRelL = (m: RawMetrics) => ({
@@ -86,27 +119,33 @@ export function computeCalibrationData(calibMetrics: RawMetrics[], screenPoints:
     y: m.pupilR.y - (m.corners.RO.y + m.corners.RI.y) / 2
   });
 
-  const relL2 = getRelL(c2), relL3 = getRelL(c3), relL4 = getRelL(c4), relL5 = getRelL(c5);
-  const relR2 = getRelR(c2), relR3 = getRelR(c3), relR4 = getRelR(c4), relR5 = getRelR(c5);
+  // Extraemos las coordenadas relativas de todos los puntos recogidos (hasta 9)
+  const relsL = calibMetrics.map(getRelL);
+  const relsR = calibMetrics.map(getRelR);
 
-  // Cálculo de Escala (Ls y Rs) según Zhang & Yin
-  let LsX = (p5.x - p3.x) / (relL5.x - relL3.x);
-  let LsY = (p4.y - p2.y) / (relL4.y - relL2.y);
+  const targetsX = screenPoints.slice(0, calibMetrics.length).map(p => p.x);
+  const targetsY = screenPoints.slice(0, calibMetrics.length).map(p => p.y);
 
-  let RsX = (p5.x - p3.x) / (relR5.x - relR3.x);
-  let RsY = (p4.y - p2.y) / (relR4.y - relR2.y);
+  // Regresión Desacoplada por Ejes (Chhimpa et al., 2024)
+  // El eje Y se aísla por completo del eje X para evitar que la caída del párpado superior contamine X.
+  const regLX = fitLinearRegression(relsL.map(r => r.x), targetsX);
+  const regLY = fitLinearRegression(relsL.map(r => r.y), targetsY);
+
+  const regRX = fitLinearRegression(relsR.map(r => r.x), targetsX);
+  const regRY = fitLinearRegression(relsR.map(r => r.y), targetsY);
 
   // Sanitización de Coeficientes
-  // Aumentamos el máximo a 500 para pantallas pequeñas (13") donde el ojo se mueve poquísimo.
+  // Aumentamos el rango de clamp [10, 500] para pantallas pequeñas (13") donde el ojo se desplaza escasos píxeles.
   const clamp = (val: number, min = 10, max = 500) => {
     if (isNaN(val) || !isFinite(val)) return 50; 
     return Math.max(min, Math.min(max, Math.abs(val))) * Math.sign(val);
   };
 
-  LsX = clamp(LsX);
-  LsY = clamp(LsY);
-  RsX = clamp(RsX);
-  RsY = clamp(RsY);
+  // En la proyección en espejo, el valor absoluto de la pendiente representa la sensibilidad
+  let LsX = clamp(Math.abs(regLX.slope) > 0.1 ? Math.abs(regLX.slope) : 50);
+  let LsY = clamp(Math.abs(regLY.slope) > 0.1 ? Math.abs(regLY.slope) : 50);
+  let RsX = clamp(Math.abs(regRX.slope) > 0.1 ? Math.abs(regRX.slope) : 50);
+  let RsY = clamp(Math.abs(regRY.slope) > 0.1 ? Math.abs(regRY.slope) : 50);
 
   const IPD0 = Math.hypot(c1.pupilR.x - c1.pupilL.x, c1.pupilR.y - c1.pupilL.y);
 
@@ -114,9 +153,27 @@ export function computeCalibrationData(calibMetrics: RawMetrics[], screenPoints:
   return {
     Ls: { x: LsX, y: LsY },
     Rs: { x: RsX, y: RsY },
+    leftModel: {
+      slopeX: regLX.slope,
+      interceptX: regLX.intercept,
+      slopeY: regLY.slope,
+      interceptY: regLY.intercept,
+      r2X: regLX.r2,
+      r2Y: regLY.r2
+    },
+    rightModel: {
+      slopeX: regRX.slope,
+      interceptX: regRX.intercept,
+      slopeY: regRY.slope,
+      interceptY: regRY.intercept,
+      r2X: regRX.r2,
+      r2Y: regRY.r2
+    },
     theta0: c1.headPose.yaw,
     beta0: c1.headPose.pitch,
     IPD0: IPD0,
+    baselineGlabella: c1.glabella ? { x: c1.glabella.x, y: c1.glabella.y } : undefined,
+    baselineIrisDiameter: c1.irisDiameter || 0,
     Lc: { x: c1.pupilL.x, y: c1.pupilL.y },
     Rc: { x: c1.pupilR.x, y: c1.pupilR.y },
     cornersBenchmark: {
@@ -200,8 +257,6 @@ export function predictGazePoint(currentMetrics: RawMetrics, calib: CalibrationD
   const Rb = { x: pupilR.x - currentRcStar.x, y: pupilR.y - currentRcStar.y };
 
   // Proyección de la mirada de cada ojo
-  // Nota: Al igual que en la versión estática, x está invertido por el espejo de la cámara, y necesita ajustarse.
-  // El coeficiente de regresión Ls, Rs puede ser negativo, así que se ajustará automáticamente.
   const LG = { 
     x: currentH.x - (Lb.x * calib.Ls.x), 
     y: currentH.y + (Lb.y * calib.Ls.y) 
@@ -212,8 +267,27 @@ export function predictGazePoint(currentMetrics: RawMetrics, calib: CalibrationD
   };
 
   // Punto final combinado
-  return {
+  const combinedGaze = {
     x: Math.max(0, Math.min(1, (LG.x + RG.x) / 2)),
     y: Math.max(0, Math.min(1, (LG.y + RG.y) / 2))
   };
+
+  // Compensación Cefálica Rápida por Glabela (Chhimpa et al., 2024)
+  let compensated = combinedGaze;
+  if (currentMetrics.glabella && calib.baselineGlabella) {
+    compensated = applyGlabellaCompensation(combinedGaze, currentMetrics.glabella, calib.baselineGlabella, 1.15);
+  }
+
+  // Re-Calibración Dinámica en Eje Z (Chhimpa et al., 2024)
+  const zRecalibrated = applyZIndexRecalibration(
+    compensated,
+    currentMetrics,
+    {
+      baselineIPD: calib.IPD0,
+      baselineIrisDiameter: calib.baselineIrisDiameter,
+      screenMidpoint: { x: 0.5, y: 0.5 }
+    }
+  );
+
+  return zRecalibrated;
 }

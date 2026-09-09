@@ -24,11 +24,20 @@ export const CalibrationOverlay: React.FC = () => {
     // Cada punto dura exactamente 2 segundos.
     const pointDurationMs = 2000;
     const interval = 50; // Update progress bar every 50ms
+    const saccadicLatencyMs = 500; // Descarte de Latencia Sacádica Inicial (Chhimpa et al., 2024)
     let elapsed = 0;
+
+    // Purgamos samples residuales del punto anterior
+    useCalibrationStore.setState({ rawSamples: [] });
 
     const timer = setInterval(() => {
       elapsed += interval;
       setProgress((elapsed / pointDurationMs) * 100);
+
+      // Descarte de sacada inicial (500 ms): Purgamos los datos mientras el ojo saltaba al objetivo
+      if (elapsed === saccadicLatencyMs) {
+        useCalibrationStore.setState({ rawSamples: [] });
+      }
 
       if (elapsed >= pointDurationMs) {
         clearInterval(timer);
@@ -38,10 +47,9 @@ export const CalibrationOverlay: React.FC = () => {
         if (result) {
           nextPoint(result);
         } else {
-          // Si no hay suficientes samples, obligamos a repetir el punto o lanzamos advertencia.
-          // Por simplicidad en este MVP, pasamos el sample anterior o intentamos de nuevo.
-          console.warn("Muestras insuficientes. Intenta no parpadear ni apartar la mirada.");
-          setProgress(0); // Reinicia el punto
+          // Si no hay suficientes samples válidos (ej. parpadeo prolongado), reintentamos el punto
+          console.warn("Muestras insuficientes o parpadeo continuo. Reintentando punto...");
+          setProgress(0);
           useCalibrationStore.setState({ rawSamples: [] });
         }
       }
