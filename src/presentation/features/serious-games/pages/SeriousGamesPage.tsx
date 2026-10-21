@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef, useCallback, useState } from 'react';
 import { useWebcam } from '../../../../infrastructure/cv/hooks/useWebcam';
 import { useMediaPipeWorker } from '../../../../infrastructure/cv/hooks/useMediaPipeWorker';
 import { useGazeSmoother } from '../../../../infrastructure/cv/hooks/useGazeSmoother';
@@ -7,9 +7,10 @@ import { useCalibrationStore } from '../../../../core/store/useCalibrationStore'
 import { initializeTrackingState, predictGazePoint } from '../../../../infrastructure/cv/math/zhangYinModel';
 import { EyeTrackingGameCanvas } from '../components/EyeTrackingGameCanvas';
 import { CalibrationOverlay } from '../components/CalibrationOverlay';
+import { PreCalibrationView } from '../components/PreCalibrationView';
 
 export const SeriousGamesPage: React.FC = () => {
-  const { videoRef, startWebcam, isStreaming, error } = useWebcam();
+  const { videoRef, startWebcam, stopWebcam, isStreaming, error } = useWebcam();
   const { smooth } = useGazeSmoother(0.05, 0.9, 0.08);
   const gazeRef = useRef({ x: 0.5, y: 0.5 }); // Cursor al centro por defecto
   const frameRequestRef = useRef<number>(0);
@@ -30,13 +31,17 @@ export const SeriousGamesPage: React.FC = () => {
     }
   };
 
-  const { calibrationData, addSample, isPreCalibrating } = useCalibrationStore();
-  const [heatmapPos, setHeatmapPos] = React.useState({ x: 0.5, y: 0.5 });
+  const { calibrationData, addSample, isPreCalibrating, startCalibration } = useCalibrationStore();
+  const [heatmapPos, setHeatmapPos] = useState({ x: 0.5, y: 0.5 });
+  const rawMetricsRef = useRef<any>(null);
 
   const pipCanvasRef = useRef<HTMLCanvasElement>(null);
 
   // 1. Recepción de Coordenadas desde el Worker Cefálico
   const handleWorkerResults = useCallback((results: any) => {
+    if (results && results.rawMetrics) {
+      rawMetricsRef.current = results.rawMetrics;
+    }
 
     // Dibujar Landmarks en el Canvas PIP (si existe)
     if (pipCanvasRef.current && results && results.rawMetrics) {
@@ -54,15 +59,15 @@ export const SeriousGamesPage: React.FC = () => {
         };
 
         const metrics = results.rawMetrics;
-        // Dibujar pupilas (Rojo)
-        drawPoint(metrics.pupilL, '#FF0000', 3);
-        drawPoint(metrics.pupilR, '#FF0000', 3);
+        // Dibujar pupilas (Rojo / Turquesa según fase)
+        drawPoint(metrics.pupilL, '#26A69A', 3.5);
+        drawPoint(metrics.pupilR, '#26A69A', 3.5);
 
-        // Dibujar comisuras (Verde)
-        drawPoint(metrics.corners.LI, '#00FF00');
-        drawPoint(metrics.corners.LO, '#00FF00');
-        drawPoint(metrics.corners.RI, '#00FF00');
-        drawPoint(metrics.corners.RO, '#00FF00');
+        // Dibujar comisuras (Verde / Cyan)
+        drawPoint(metrics.corners.LI, '#8AE2D6', 2);
+        drawPoint(metrics.corners.LO, '#8AE2D6', 2);
+        drawPoint(metrics.corners.RI, '#8AE2D6', 2);
+        drawPoint(metrics.corners.RO, '#8AE2D6', 2);
       }
     } else if (pipCanvasRef.current) {
       const ctx = pipCanvasRef.current.getContext('2d');
@@ -80,14 +85,12 @@ export const SeriousGamesPage: React.FC = () => {
         }
 
         // --- LÓGICA DE HEATMAP (FEEDBACK VISUAL APROXIMADO DURANTE CALIBRACIÓN) ---
-        // Calculamos un centroide aproximado de la cuenca del ojo para aislar la pupila
         const leftCenter = { x: (results.rawMetrics.corners.LO.x + results.rawMetrics.corners.LI.x) / 2, y: (results.rawMetrics.corners.LO.y + results.rawMetrics.corners.LI.y) / 2 };
         const rightCenter = { x: (results.rawMetrics.corners.RO.x + results.rawMetrics.corners.RI.x) / 2, y: (results.rawMetrics.corners.RO.y + results.rawMetrics.corners.RI.y) / 2 };
 
         const rawPupilL = { x: results.rawMetrics.pupilL.x - leftCenter.x, y: results.rawMetrics.pupilL.y - leftCenter.y };
         const rawPupilR = { x: results.rawMetrics.pupilR.x - rightCenter.x, y: results.rawMetrics.pupilR.y - rightCenter.y };
 
-        // Mapeo rudimentario solo para que el usuario vea que el ojo se mueve
         const rawX = 0.5 - ((rawPupilL.x + rawPupilR.x) / 2) * 50.0;
         const rawY = 0.5 + ((rawPupilL.y + rawPupilR.y) / 2) * 40.0;
 
@@ -97,7 +100,6 @@ export const SeriousGamesPage: React.FC = () => {
             y: smooth({ x: 0, y: Math.max(0, Math.min(1, rawY)) }).y
           });
         }
-        // -------------------------------------------------------------------------
 
         if (debugRef.current) {
           debugRef.current.innerText = `STATUS: CALIBRANDO... ${isBlinking ? '👁️ [PARPADEO DETECTADO - Muestra omitida]' : ''}
@@ -107,12 +109,7 @@ Yaw: ${(results.rawMetrics.headPose.yaw * (180 / Math.PI)).toFixed(1)}° | Pitch
         }
       } else if (results && results.rawResultsAvailable) {
         if (debugRef.current) {
-          debugRef.current.innerText = `STATUS: ROSTRO DETECTADO (Pero sin pupilas precisas).
-Landmarks: ${results.landmarkCount || 0}`;
-        }
-      } else {
-        if (debugRef.current) {
-          debugRef.current.innerText = "STATUS: BUSCANDO ROSTRO...\n¡Asegúrate de tener buena luz y mirar a la cámara!";
+          debugRef.current.innerText = `STATUS: ROSTRO DETECTADO (Esperando pupilas)...`;
         }
       }
       return;
@@ -120,26 +117,14 @@ Landmarks: ${results.landmarkCount || 0}`;
 
     // Modo Juego (Tracking): Usamos el motor de Zhang & Yin + Compensación Glabela
     if (calibrationData && results && results.rawMetrics) {
-      // 1. Filtrado Anti-Parpadeo (EAR < 0.20): Si parpadea, congelamos el cursor para evitar saltos bruscos
       if (results.rawMetrics.ear?.isBlinking) {
-        if (debugRef.current) {
-          debugRef.current.innerText = `STATUS: TRACKING ACTIVO (👁️ Parpadeo - Cursor protegido)
-EAR: ${results.rawMetrics.ear.avg.toFixed(3)} (Umbral: < 0.20)
-Yaw: ${(results.rawMetrics.headPose.yaw * (180 / Math.PI)).toFixed(1)}° | Pitch: ${(results.rawMetrics.headPose.pitch * (180 / Math.PI)).toFixed(1)}°`;
-        }
         return;
       }
 
-      // 2. Predecir mirada combinando pose de cabeza, vectores pupilares y anclaje en glabela
       const predictedGaze = predictGazePoint(results.rawMetrics, calibrationData);
-
-      // 3. Filtro Anti-Temblor (Adaptive EMA)
       const smoothed = smooth(predictedGaze);
-
-      // 4. Inyectamos al Canvas Directamente (Zero React Lag)
       gazeRef.current = smoothed;
 
-      // Actualizamos el HUD de depuración
       if (debugRef.current) {
         const r2X = calibrationData.leftModel?.r2X ? (calibrationData.leftModel.r2X * 100).toFixed(0) : 'N/A';
         const r2Y = calibrationData.leftModel?.r2Y ? (calibrationData.leftModel.r2Y * 100).toFixed(0) : 'N/A';
@@ -148,17 +133,7 @@ Yaw: ${(results.rawMetrics.headPose.yaw * (180 / Math.PI)).toFixed(1)}° | Pitch
 Fidelidad Calibración: R² X: ${r2X}% | R² Y: ${r2Y}%
 EAR: ${results.rawMetrics.ear ? results.rawMetrics.ear.avg.toFixed(3) : 'N/A'}
 Yaw: ${(results.rawMetrics.headPose.yaw * (180 / Math.PI)).toFixed(1)}° | Pitch: ${(results.rawMetrics.headPose.pitch * (180 / Math.PI)).toFixed(1)}°
-Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}
-Smooth X: ${smoothed.x.toFixed(3)} | Y: ${smoothed.y.toFixed(3)}`;
-      }
-    } else if (results && results.rawResultsAvailable) {
-      if (debugRef.current) {
-        debugRef.current.innerText = `STATUS: ROSTRO DETECTADO (Esperando Calibración o Pupilas).
-Landmarks: ${results.landmarkCount || 0}`;
-      }
-    } else {
-      if (debugRef.current) {
-        debugRef.current.innerText = "STATUS: BUSCANDO ROSTRO...\n¡Asegúrate de tener buena luz y mirar a la cámara!";
+Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
       }
     }
   }, [smooth, calibrationData, addSample]);
@@ -168,10 +143,8 @@ Landmarks: ${results.landmarkCount || 0}`;
   // 2. Bucle de Captura del Video (Loop Principal)
   const captureLoop = useCallback(() => {
     if (videoRef.current && isStreaming && isReady()) {
-      // Extraemos el frame y lo enviamos al Worker
       processVideoFrame(videoRef.current, performance.now());
     }
-    // Llamada recursiva súper rápida
     frameRequestRef.current = requestAnimationFrame(captureLoop);
   }, [isStreaming, isReady, processVideoFrame, videoRef]);
 
@@ -197,90 +170,88 @@ Landmarks: ${results.landmarkCount || 0}`;
   }, [isStreaming, captureLoop]);
 
   return (
-    <div className="min-h-screen bg-hc-black flex flex-col items-center justify-center p-8 relative">
-      {/* HUD Superior */}
-      <div className="absolute top-4 left-4 right-4 flex justify-between text-hc-white">
-        <h2 className="text-2xl font-bold text-hc-yellow">NeuroVision Terapia</h2>
-        {!isLoaded && <span className="animate-pulse">Cargando Motores de IA...</span>}
-        {error && <span className="text-red-500">{error}</span>}
-      </div>
-
-      {/* Feed de la Webcam (Centrado en Pre-Calibración, PIP en el resto) */}
-      <div className={`z-50 transition-all duration-500 flex flex-col items-center ${
-        isPreCalibrating 
-        ? "absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"
-        : "absolute bottom-4 right-4"
-      }`}>
-        <div className={`relative ${isPreCalibrating ? "w-[640px] h-[480px]" : "w-48 h-36"}`}>
-          <video 
-            ref={videoRef} 
-            className="w-full h-full rounded-xl border-4 border-hc-gray shadow-2xl object-cover opacity-90" 
-            playsInline 
-            muted 
-            autoPlay
-          />
-          <canvas 
-            ref={pipCanvasRef}
-            width={isPreCalibrating ? 640 : 192}
-            height={isPreCalibrating ? 480 : 144}
-            className="absolute top-0 left-0 w-full h-full rounded-xl pointer-events-none"
-          />
-          {/* Silueta Guía (Solo en Pre-Calibración) */}
-          {isPreCalibrating && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="w-[300px] h-[400px] border-4 border-dashed border-hc-yellow/50 rounded-[100px] flex items-center justify-center">
-                <span className="absolute bottom-8 text-hc-yellow font-bold text-center bg-black/50 px-4 py-2 rounded-lg">
-                  Centra tu rostro aquí
-                </span>
-              </div>
-            </div>
-          )}
-        </div>
-        
-        {isPreCalibrating && (
-          <button 
-            onClick={() => useCalibrationStore.getState().startCalibration()}
-            className="mt-6 px-8 py-4 bg-hc-yellow text-hc-black font-bold text-xl rounded-full shadow-[0_0_20px_rgba(251,191,36,0.5)] hover:bg-yellow-400 hover:scale-105 transition-all"
-          >
-            Iniciar Calibración
-          </button>
-        )}
-      </div>
+    <div className={`min-h-screen ${isPreCalibrating ? 'bg-[#F3FAFF] text-[#1C2A39] p-6 lg:p-12' : 'bg-[#000000] text-white p-8'} flex flex-col items-center justify-center relative transition-colors duration-300 font-sans`}>
       
-      <div className="absolute bottom-4 left-4 bg-black/80 border border-hc-yellow text-hc-yellow p-4 rounded-xl font-mono text-sm shadow-lg z-50 pointer-events-none">
-        <pre ref={debugRef} className="m-0">
-          Iniciando telemetría...
-        </pre>
-      </div>
-
-      {gamePhase === 'CALIBRATION' && (
+      {/* VISTA 1: CALIBRACIÓN PREVIA Y CONDICIONES (MOCKUP EXACTO) */}
+      {isPreCalibrating ? (
+        <PreCalibrationView
+          videoRef={videoRef}
+          pipCanvasRef={pipCanvasRef}
+          isStreaming={isStreaming}
+          onStartCalibration={startCalibration}
+          onRetryCamera={(deviceId?: string) => {
+            stopWebcam();
+            startWebcam(deviceId);
+          }}
+          rawMetricsRef={rawMetricsRef}
+          fps={60}
+        />
+      ) : (
+        /* VISTA 2: CALIBRACIÓN DE 9 PUNTOS / JUEGO ACTIVO */
         <>
-          <CalibrationOverlay />
-          {/* Heatmap Visualizador en tiempo real de la mirada en bruto */}
-          <div
-            className="absolute w-32 h-32 rounded-full pointer-events-none z-100 bg-white transition-transform duration-75"
-            style={{
-              left: `${heatmapPos.x * 100}%`,
-              top: `${heatmapPos.y * 100}%`,
-              transform: 'translate(-50%, -50%)',
-              background: 'radial-gradient(circle, rgba(139, 92, 246, 0.6) 0%, rgba(139, 92, 246, 0) 70%)',
-              filter: 'blur(8px)'
-            }}
-          />
+          {/* HUD Superior Minimalista */}
+          <div className="absolute top-4 left-6 right-6 flex justify-between items-center text-white/80 z-40">
+            <h2 className="text-xl font-bold tracking-tight text-[#26A69A]">NeuroVisión Terapia</h2>
+            {!isLoaded && <span className="text-xs bg-white/10 px-3 py-1 rounded-full animate-pulse">Cargando Motores de IA...</span>}
+            {error && <span className="text-xs bg-red-900/60 text-red-200 px-3 py-1 rounded-full">{error}</span>}
+          </div>
+
+          {/* PIP Video flotante abajo a la derecha */}
+          <div className="fixed bottom-4 right-4 z-50 w-48 h-36 rounded-xl overflow-hidden shadow-2xl border-2 border-white/20 bg-black">
+            <video 
+              ref={videoRef} 
+              className="w-full h-full object-cover -scale-x-100 opacity-90" 
+              playsInline 
+              muted 
+              autoPlay
+            />
+            <canvas 
+              ref={pipCanvasRef}
+              width={192}
+              height={144}
+              className="absolute inset-0 w-full h-full -scale-x-100 pointer-events-none"
+            />
+          </div>
+
+          {/* HUD Telemetría flotante abajo a la izquierda */}
+          <div className="fixed bottom-4 left-4 bg-black/80 backdrop-blur-xs border border-white/10 text-[#8AE2D6] p-3.5 rounded-xl font-mono text-xs shadow-xl z-50 pointer-events-none">
+            <pre ref={debugRef} className="m-0 leading-tight">
+              Iniciando telemetría...
+            </pre>
+          </div>
+
+          {/* Overlay de los 9 Puntos de Calibración */}
+          {gamePhase === 'CALIBRATION' && (
+            <>
+              <CalibrationOverlay />
+              {/* Heatmap Visualizador en tiempo real */}
+              <div
+                className="absolute w-28 h-28 rounded-full pointer-events-none z-100 transition-transform duration-75"
+                style={{
+                  left: `${heatmapPos.x * 100}%`,
+                  top: `${heatmapPos.y * 100}%`,
+                  transform: 'translate(-50%, -50%)',
+                  background: 'radial-gradient(circle, rgba(38, 166, 154, 0.6) 0%, rgba(38, 166, 154, 0) 70%)',
+                  filter: 'blur(6px)'
+                }}
+              />
+            </>
+          )}
+
+          {/* Motor Gráfico del Juego (Serious Games) */}
+          <div className="w-full max-w-5xl aspect-video relative z-20">
+            <EyeTrackingGameCanvas
+              gazeRef={gazeRef}
+              prescription={prescription}
+              gamePhase={gamePhase}
+              onPhaseChange={setGamePhase}
+              width={1024}
+              height={576}
+            />
+          </div>
         </>
       )}
 
-      {/* Motor Gráfico del Juego */}
-      <div className="w-full max-w-5xl aspect-video relative z-20">
-        <EyeTrackingGameCanvas
-          gazeRef={gazeRef}
-          prescription={prescription}
-          gamePhase={gamePhase}
-          onPhaseChange={setGamePhase}
-          width={1024}
-          height={576}
-        />
-      </div>
     </div>
   );
 };
