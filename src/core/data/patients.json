@@ -1,0 +1,781 @@
+[
+  {
+    "id": "pat-000",
+    "initials": "JP",
+    "name": "Juan Pérez R.",
+    "medicalRecordNumber": "#782910",
+    "nationalId": "08472911",
+    "age": 68,
+    "gender": "Masculino",
+    "affectedHemifield": "LEFT",
+    "hemifieldDetail": "Hemianopsia Homónima Izquierda",
+    "accountStatus": "ACTIVE",
+    "facility": "Hospital Nac. Edgardo Rebagliati Martins",
+    "shift": "Turno Mañana",
+    "phone": "+51 984 729 110",
+    "email": "juan.perez.rehab@gmail.com",
+    "enrollmentDate": "12 de Septiembre, 2024 (Hace 6 semanas)",
+    "treatingDoctor": {
+      "name": "Dra. Elena Ramos Morales, M.D.",
+      "specialty": "Neuroftalmología",
+      "idNumber": "CMP #4492 - RNE #2104",
+      "hospital": "Hospital Nac. Edgardo Rebagliati Martins"
+    },
+    "primaryDiagnosisTitle": "Hemianopsia Homónima Izquierda post-ACV Isquémico PCA (Arteria Cerebral Posterior)",
+    "primaryDiagnosisDetail": "Defecto campimétrico cuadrante izquierdo con respeto macular parcial (2°)",
+    "stats": {
+      "globalAdherence": 92.4,
+      "completedSessions": 28,
+      "scheduledSessions": 30,
+      "meanFatigue": 1.8,
+      "totalTherapyHours": 5.6,
+      "validatedSessions": 27,
+      "totalRecordedSessions": 28,
+      "complianceAverage": 94.8
+    },
+    "adherence": {
+      "rate": 92.4,
+      "category": "Excelente"
+    },
+    "riskAlert": {
+      "severity": "OPTIMAL",
+      "label": "Control Óptimo (HL7 Activo)"
+    },
+    "lastSession": {
+      "timestampText": "Hoy, 08:30 AM",
+      "durationMinutes": 12,
+      "moduleName": "Búsqueda Visual Dinámica - Nivel 3"
+    },
+    "antecedents": {
+      "strokeDate": "15 de Junio, 2024",
+      "strokeType": "Ictus Isquémico Aterotrombótico",
+      "affectedArtery": "Arteria Cerebral Posterior Derecha (Segmento P2)",
+      "motorDeficit": "Hemiparesia izquierda leve remanente (Fuerza 4+/5)",
+      "cognitiveDeficit": "Sin deterioro cognitivo mayor (MoCA: 27/30)",
+      "hypertension": true,
+      "diabetes": false,
+      "currentMedications": [
+        "Atorvastatina 40mg/día",
+        "AAS 100mg/día",
+        "Losartán 50mg c/12h"
+      ]
+    },
+    "activePlan": {
+      "prescribedDate": "10 de Octubre, 2024",
+      "exercises": [
+        {
+          "id": "ex-01",
+          "name": "Búsqueda Visual Dinámica",
+          "category": "Exploración Periférica",
+          "level": 3,
+          "targetSpeed": 1.2,
+          "visualFieldAmplitude": 0.85,
+          "minFixationTimeMs": 650,
+          "dailyTargetMinutes": 15
+        },
+        {
+          "id": "ex-02",
+          "name": "Fijación Foveal y Estabilidad",
+          "category": "Anclaje Central",
+          "level": 2,
+          "targetSpeed": 0.9,
+          "visualFieldAmplitude": 0.50,
+          "minFixationTimeMs": 900,
+          "dailyTargetMinutes": 10
+        },
+        {
+          "id": "ex-03",
+          "name": "Exploración Sacádica Compensatoria",
+          "category": "Amplitud Oculomotora",
+          "level": 3,
+          "targetSpeed": 1.4,
+          "visualFieldAmplitude": 0.90,
+          "minFixationTimeMs": 500,
+          "dailyTargetMinutes": 15
+        }
+      ]
+    },
+    "campimetryData": {
+      "leftEyeDefect": "HOMONYMOUS_LEFT",
+      "rightEyeDefect": "HOMONYMOUS_LEFT",
+      "fixationStabilityBCEA": 0.82,
+      "saccadicGain": 0.94,
+      "fovealSearchLatencyMs": 225
+    },
+    "sessionHistory": [
+      {
+        "id": "ses-028",
+        "dateText": "Hoy, 24 Oct 2024",
+        "timeText": "08:30 AM",
+        "period": "Mañana",
+        "moduleName": "Búsqueda Visual Dinámica",
+        "moduleDetail": "Hemicampo Izquierdo • Nivel 3",
+        "durationMinutes": 12,
+        "complianceRate": 100,
+        "fovealPrecision": 94,
+        "microsaccadesPerSec": 1.2,
+        "isValid": true,
+        "validationStatus": "VALID_OPTIMAL",
+        "validationLabel": "Válida ✓ (Telemetría Óptima)",
+        "notes": "Excelente compensación sacádica en cuadrante superior izquierdo."
+      },
+      {
+        "id": "ses-027",
+        "dateText": "Ayer, 23 Oct 2024",
+        "timeText": "17:15 PM",
+        "period": "Tarde",
+        "moduleName": "Entrenamiento de Fijación Ocular Sostenida",
+        "moduleDetail": "Estabilidad Central Foveal",
+        "durationMinutes": 10,
+        "complianceRate": 100,
+        "fovealPrecision": 91,
+        "microsaccadesPerSec": 1.4,
+        "isValid": true,
+        "validationStatus": "VALID_OPTIMAL",
+        "validationLabel": "Válida ✓ (Telemetría Óptima)",
+        "notes": "Buena estabilidad foveal con mínima dispersión BCEA."
+      },
+      {
+        "id": "ses-026",
+        "dateText": "21 Oct 2024",
+        "timeText": "09:10 AM",
+        "period": "Mañana",
+        "moduleName": "Exploración Sacádica Compensatoria",
+        "moduleDetail": "Amplitud Horizontal 30°",
+        "durationMinutes": 15,
+        "complianceRate": 95,
+        "fovealPrecision": 88,
+        "latencyMs": 240,
+        "isValid": true,
+        "validationStatus": "VALID_OPTIMAL",
+        "validationLabel": "Válida ✓ (Telemetría Óptima)",
+        "notes": "Latencia sacádica dentro de percentil 85 para su grupo etario."
+      },
+      {
+        "id": "ses-025",
+        "dateText": "19 Oct 2024",
+        "timeText": "16:40 PM",
+        "period": "Tarde",
+        "moduleName": "Búsqueda Visual Dinámica - Nivel 2",
+        "moduleDetail": "Contraste Reducido 40%",
+        "durationMinutes": 6,
+        "targetDurationMinutes": 12,
+        "complianceRate": 55,
+        "fovealPrecision": 72,
+        "isValid": false,
+        "interrupted": true,
+        "validationStatus": "INTERRUPTED_FATIGUE",
+        "validationLabel": "Interrumpida (Fatiga Ocular Nivel 4)",
+        "notes": "El paciente detuvo la sesión por cansancio ocular. Se ajustó contraste."
+      },
+      {
+        "id": "ses-024",
+        "dateText": "18 Oct 2024",
+        "timeText": "08:45 AM",
+        "period": "Mañana",
+        "moduleName": "Fijación Foveal y Estabilidad Ocular",
+        "moduleDetail": "Módulo de Re-anclaje Macular",
+        "durationMinutes": 12,
+        "complianceRate": 100,
+        "fovealPrecision": 96,
+        "microsaccadesPerSec": 0.9,
+        "isValid": true,
+        "validationStatus": "VALID_OPTIMAL",
+        "validationLabel": "Válida ✓ (Telemetría Óptima)",
+        "notes": "Fijaciones sostenidas superiores a 800ms sin temblores."
+      },
+      {
+        "id": "ses-023",
+        "dateText": "16 Oct 2024",
+        "timeText": "10:20 AM",
+        "period": "Mañana",
+        "moduleName": "Entrenamiento de Exploración Visual",
+        "moduleDetail": "Lectura Compensatoria de Textos Cortos",
+        "durationMinutes": 14,
+        "complianceRate": 100,
+        "fovealPrecision": 89,
+        "microsaccadesPerSec": 1.1,
+        "isValid": true,
+        "validationStatus": "VALID_OPTIMAL",
+        "validationLabel": "Válida ✓ (Telemetría Óptima)",
+        "notes": "Lectura fluida con disminución del tiempo de rastreo en hemicampo ciego."
+      }
+    ]
+  },
+  {
+    "id": "pat-001",
+    "initials": "CM",
+    "name": "Carlos Mendoza V.",
+    "medicalRecordNumber": "#849201",
+    "nationalId": "08392110",
+    "age": 64,
+    "gender": "Masculino",
+    "affectedHemifield": "LEFT",
+    "hemifieldDetail": "Homónima Completa",
+    "accountStatus": "ACTIVE",
+    "facility": "Hospital Nac. Edgardo Rebagliati Martins",
+    "shift": "Turno Mañana",
+    "phone": "+51 984 291 002",
+    "email": "carlos.mendoza.v@gmail.com",
+    "enrollmentDate": "01 de Agosto, 2024 (Hace 12 semanas)",
+    "treatingDoctor": {
+      "name": "Dra. Elena Ramos Morales, M.D.",
+      "specialty": "Neuroftalmología",
+      "idNumber": "CMP #4492 - RNE #2104",
+      "hospital": "Hospital Nac. Edgardo Rebagliati Martins"
+    },
+    "primaryDiagnosisTitle": "Hemianopsia Homónima Izquierda Completa post-ACV Isquémico",
+    "primaryDiagnosisDetail": "Lesión isquémica en radiaciones ópticas derechas (Haz de Meyer)",
+    "stats": {
+      "globalAdherence": 96.0,
+      "completedSessions": 34,
+      "scheduledSessions": 35,
+      "meanFatigue": 1.4,
+      "totalTherapyHours": 8.5,
+      "validatedSessions": 34,
+      "totalRecordedSessions": 34,
+      "complianceAverage": 97.2
+    },
+    "adherence": {
+      "rate": 96.0,
+      "category": "Excelente"
+    },
+    "riskAlert": {
+      "severity": "OPTIMAL",
+      "label": "Control Óptimo"
+    },
+    "lastSession": {
+      "timestampText": "Hoy, 09:15 AM",
+      "durationMinutes": 15,
+      "moduleName": "Módulo Sacádico II"
+    },
+    "antecedents": {
+      "strokeDate": "20 de Mayo, 2024",
+      "strokeType": "ACV Isquémico",
+      "affectedArtery": "Arteria Coroidea Anterior / PCA Derecha",
+      "motorDeficit": "Sin déficit motor",
+      "cognitiveDeficit": "Leve lentitud en procesamiento visuoespacial",
+      "hypertension": true,
+      "diabetes": false,
+      "currentMedications": ["Clopidogrel 75mg", "Rosuvastatina 20mg"]
+    },
+    "activePlan": {
+      "prescribedDate": "15 de Septiembre, 2024",
+      "exercises": [
+        {
+          "id": "ex-11",
+          "name": "Módulo Sacádico II",
+          "category": "Exploración Dinámica",
+          "level": 4,
+          "targetSpeed": 1.5,
+          "visualFieldAmplitude": 0.90,
+          "minFixationTimeMs": 600,
+          "dailyTargetMinutes": 15
+        }
+      ]
+    },
+    "campimetryData": {
+      "leftEyeDefect": "HOMONYMOUS_LEFT",
+      "rightEyeDefect": "HOMONYMOUS_LEFT",
+      "fixationStabilityBCEA": 0.75,
+      "saccadicGain": 0.96,
+      "fovealSearchLatencyMs": 210
+    },
+    "sessionHistory": [
+      {
+        "id": "cm-001",
+        "dateText": "Hoy, 24 Oct 2024",
+        "timeText": "09:15 AM",
+        "period": "Mañana",
+        "moduleName": "Módulo Sacádico II",
+        "moduleDetail": "Hemicampo Ciego • Nivel 4",
+        "durationMinutes": 15,
+        "complianceRate": 100,
+        "fovealPrecision": 96,
+        "microsaccadesPerSec": 1.0,
+        "isValid": true,
+        "validationStatus": "VALID_OPTIMAL",
+        "validationLabel": "Válida ✓ (Telemetría Óptima)",
+        "notes": "Control impecable de sacadas compensatorias."
+      }
+    ]
+  },
+  {
+    "id": "pat-002",
+    "initials": "RQ",
+    "name": "Rosa María Quispe L.",
+    "medicalRecordNumber": "#773190",
+    "nationalId": "10492842",
+    "age": 58,
+    "gender": "Femenino",
+    "affectedHemifield": "RIGHT",
+    "hemifieldDetail": "Homónima Derecha",
+    "accountStatus": "ACTIVE",
+    "facility": "Hospital Nac. Edgardo Rebagliati Martins",
+    "shift": "Turno Mañana",
+    "phone": "+51 992 481 920",
+    "email": "rosa.quispe@outlook.com",
+    "enrollmentDate": "20 de Agosto, 2024 (Hace 9 semanas)",
+    "treatingDoctor": {
+      "name": "Dra. Elena Ramos Morales, M.D.",
+      "specialty": "Neuroftalmología",
+      "idNumber": "CMP #4492 - RNE #2104",
+      "hospital": "Hospital Nac. Edgardo Rebagliati Martins"
+    },
+    "primaryDiagnosisTitle": "Hemianopsia Homónima Derecha post-ACV Hemorrágico Lóbulo Occipital Izquierdo",
+    "primaryDiagnosisDetail": "Compromiso de lectura y rastreo foveal a la derecha",
+    "stats": {
+      "globalAdherence": 92.0,
+      "completedSessions": 22,
+      "scheduledSessions": 24,
+      "meanFatigue": 2.1,
+      "totalTherapyHours": 4.8,
+      "validatedSessions": 21,
+      "totalRecordedSessions": 22,
+      "complianceAverage": 93.5
+    },
+    "adherence": {
+      "rate": 92.0,
+      "category": "Regular"
+    },
+    "riskAlert": {
+      "severity": "NORMAL",
+      "label": "Normal"
+    },
+    "lastSession": {
+      "timestampText": "Hoy, 08:30 AM",
+      "durationMinutes": 12,
+      "moduleName": "Búsqueda Visual"
+    },
+    "antecedents": {
+      "strokeDate": "10 de Julio, 2024",
+      "strokeType": "Hemorragia Intraparenquimatosa Occipital Izquierda",
+      "affectedArtery": "Malformación Arteriovenosa tratada",
+      "motorDeficit": "Ninguno",
+      "cognitiveDeficit": "Alexia pura resuelta parcialmente",
+      "hypertension": false,
+      "diabetes": false,
+      "currentMedications": ["Levetiracetam 500mg c/12h"]
+    },
+    "activePlan": {
+      "prescribedDate": "01 de Octubre, 2024",
+      "exercises": [
+        {
+          "id": "ex-21",
+          "name": "Búsqueda Visual",
+          "category": "Exploración Hemicampo Derecho",
+          "level": 2,
+          "targetSpeed": 1.0,
+          "visualFieldAmplitude": 0.75,
+          "minFixationTimeMs": 800,
+          "dailyTargetMinutes": 12
+        }
+      ]
+    },
+    "campimetryData": {
+      "leftEyeDefect": "HOMONYMOUS_RIGHT",
+      "rightEyeDefect": "HOMONYMOUS_RIGHT",
+      "fixationStabilityBCEA": 0.89,
+      "saccadicGain": 0.90,
+      "fovealSearchLatencyMs": 255
+    },
+    "sessionHistory": [
+      {
+        "id": "rq-001",
+        "dateText": "Hoy, 24 Oct 2024",
+        "timeText": "08:30 AM",
+        "period": "Mañana",
+        "moduleName": "Búsqueda Visual",
+        "moduleDetail": "Hemicampo Derecho • Nivel 2",
+        "durationMinutes": 12,
+        "complianceRate": 92,
+        "fovealPrecision": 89,
+        "microsaccadesPerSec": 1.3,
+        "isValid": true,
+        "validationStatus": "VALID_OPTIMAL",
+        "validationLabel": "Válida ✓ (Telemetría Óptima)",
+        "notes": "Progreso sostenido en rastreo sacádico."
+      }
+    ]
+  },
+  {
+    "id": "pat-003",
+    "initials": "JV",
+    "name": "Jorge Valdivia P.",
+    "medicalRecordNumber": "#621450",
+    "nationalId": "07221948",
+    "age": 71,
+    "gender": "Masculino",
+    "affectedHemifield": "LEFT",
+    "hemifieldDetail": "Cuadrantanopsia Sup",
+    "accountStatus": "PENDING",
+    "statusDetail": "Código SMS Enviado",
+    "facility": "Hospital Nac. Edgardo Rebagliati Martins",
+    "shift": "Turno Mañana",
+    "phone": "+51 971 029 384",
+    "email": "jorge.valdivia@gmail.com",
+    "enrollmentDate": "18 de Octubre, 2024 (Hace 1 semana)",
+    "treatingDoctor": {
+      "name": "Dra. Elena Ramos Morales, M.D.",
+      "specialty": "Neuroftalmología",
+      "idNumber": "CMP #4492 - RNE #2104",
+      "hospital": "Hospital Nac. Edgardo Rebagliati Martins"
+    },
+    "primaryDiagnosisTitle": "Cuadrantanopsia Homónima Superior Izquierda post-ACV Lóbulo Temporal Derecho",
+    "primaryDiagnosisDetail": "Compromiso de cuadrante superior visual izquierdo (Asa de Meyer)",
+    "stats": {
+      "globalAdherence": 0,
+      "completedSessions": 0,
+      "scheduledSessions": 10,
+      "meanFatigue": 0,
+      "totalTherapyHours": 0,
+      "validatedSessions": 0,
+      "totalRecordedSessions": 0
+    },
+    "adherence": {
+      "rate": 0,
+      "category": "Deficiente"
+    },
+    "riskAlert": {
+      "severity": "PENDING",
+      "label": "Calibración pendiente"
+    },
+    "lastSession": {
+      "timestampText": "Sin registro inicial",
+      "durationMinutes": 0,
+      "moduleName": "Esperando primera sesión"
+    },
+    "antecedents": {
+      "strokeDate": "05 de Septiembre, 2024",
+      "strokeType": "Isquemia Cerebral Transitoria evolucionada",
+      "affectedArtery": "Ramas temporales de MCA derecha",
+      "motorDeficit": "Ninguno",
+      "cognitiveDeficit": "Ninguno",
+      "hypertension": true,
+      "diabetes": true,
+      "currentMedications": ["Aspirina 100mg"]
+    },
+    "activePlan": {
+      "prescribedDate": "18 de Octubre, 2024",
+      "exercises": []
+    },
+    "campimetryData": {
+      "leftEyeDefect": "SUPERIOR_QUADRANT",
+      "rightEyeDefect": "SUPERIOR_QUADRANT",
+      "fixationStabilityBCEA": 0.95,
+      "saccadicGain": 0.88,
+      "fovealSearchLatencyMs": 280
+    },
+    "sessionHistory": []
+  },
+  {
+    "id": "pat-004",
+    "initials": "CB",
+    "name": "Carmen Lucía Beltrán",
+    "medicalRecordNumber": "#994821",
+    "nationalId": "09482711",
+    "age": 62,
+    "gender": "Femenino",
+    "affectedHemifield": "RIGHT",
+    "hemifieldDetail": "Hemianopsia Completa",
+    "accountStatus": "ACTIVE",
+    "facility": "Hospital Guillermo Almenara Irigoyen",
+    "shift": "Turno Tarde",
+    "phone": "+51 940 182 931",
+    "email": "carmen.beltran@gmail.com",
+    "enrollmentDate": "15 de Agosto, 2024",
+    "treatingDoctor": {
+      "name": "Dra. Elena Ramos Morales, M.D.",
+      "specialty": "Neuroftalmología",
+      "idNumber": "CMP #4492 - RNE #2104",
+      "hospital": "Hospital Guillermo Almenara Irigoyen"
+    },
+    "primaryDiagnosisTitle": "Hemianopsia Homónima Derecha Completa con Fatiga Ocular Aguda",
+    "primaryDiagnosisDetail": "Interrupción prematura de sesiones por fatiga visual severa",
+    "stats": {
+      "globalAdherence": 54.0,
+      "completedSessions": 8,
+      "scheduledSessions": 18,
+      "meanFatigue": 4.2,
+      "totalTherapyHours": 1.9,
+      "validatedSessions": 7,
+      "totalRecordedSessions": 8,
+      "complianceAverage": 62.0
+    },
+    "adherence": {
+      "rate": 54.0,
+      "category": "Deficiente"
+    },
+    "riskAlert": {
+      "severity": "CRITICAL",
+      "label": "Inactividad 3 días seguidos"
+    },
+    "lastSession": {
+      "timestampText": "Ayer, 18:40 PM",
+      "durationMinutes": 4,
+      "moduleName": "Interrumpida al min 4",
+      "interrupted": true
+    },
+    "antecedents": {
+      "strokeDate": "02 de Junio, 2024",
+      "strokeType": "ACV Isquémico MCA Izquierdo",
+      "affectedArtery": "Arteria Cerebral Media Izquierda",
+      "motorDeficit": "Hemiparesia derecha leve",
+      "cognitiveDeficit": "Fatigabilidad cognitiva rápida",
+      "hypertension": true,
+      "diabetes": true,
+      "currentMedications": ["Metformina 850mg", "Amlodipino 5mg"]
+    },
+    "activePlan": {
+      "prescribedDate": "05 de Octubre, 2024",
+      "exercises": [
+        {
+          "id": "ex-41",
+          "name": "Exploración Guiada de Bajo Contraste",
+          "category": "Desensibilización",
+          "level": 1,
+          "targetSpeed": 0.7,
+          "visualFieldAmplitude": 0.50,
+          "minFixationTimeMs": 1100,
+          "dailyTargetMinutes": 6
+        }
+      ]
+    },
+    "campimetryData": {
+      "leftEyeDefect": "HOMONYMOUS_RIGHT",
+      "rightEyeDefect": "HOMONYMOUS_RIGHT",
+      "fixationStabilityBCEA": 1.45,
+      "saccadicGain": 0.76,
+      "fovealSearchLatencyMs": 340
+    },
+    "sessionHistory": [
+      {
+        "id": "cb-001",
+        "dateText": "Ayer, 23 Oct 2024",
+        "timeText": "18:40 PM",
+        "period": "Tarde",
+        "moduleName": "Exploración Guiada",
+        "moduleDetail": "Hemicampo Derecho • Nivel 1",
+        "durationMinutes": 4,
+        "targetDurationMinutes": 10,
+        "complianceRate": 40,
+        "fovealPrecision": 65,
+        "isValid": false,
+        "interrupted": true,
+        "validationStatus": "INTERRUPTED_FATIGUE",
+        "validationLabel": "Interrumpida (Fatiga Ocular Nivel 4)",
+        "notes": "Detenida automáticamente tras detectar aumento de parpadeo y cierre ocular involuntario."
+      }
+    ]
+  },
+  {
+    "id": "pat-005",
+    "initials": "MA",
+    "name": "Mateo Alarcón G.",
+    "medicalRecordNumber": "#883204",
+    "nationalId": "41209388",
+    "age": 49,
+    "gender": "Masculino",
+    "affectedHemifield": "LEFT",
+    "hemifieldDetail": "Defecto Campimétrico Parcial",
+    "accountStatus": "ACTIVE",
+    "facility": "Telemedicina Domiciliaria",
+    "shift": "Turno Mañana",
+    "phone": "+51 961 829 401",
+    "email": "mateo.alarcon@gmail.com",
+    "enrollmentDate": "10 de Julio, 2024 (Hace 14 semanas)",
+    "treatingDoctor": {
+      "name": "Dra. Elena Ramos Morales, M.D.",
+      "specialty": "Neuroftalmología",
+      "idNumber": "CMP #4492 - RNE #2104",
+      "hospital": "Telemedicina Domiciliaria"
+    },
+    "primaryDiagnosisTitle": "Defecto Campimétrico Parcial Izquierdo con Fuerte Recuperación Foveal",
+    "primaryDiagnosisDetail": "Evolución sobresaliente en velocidad de fijación y lectura compensatoria",
+    "stats": {
+      "globalAdherence": 98.0,
+      "completedSessions": 42,
+      "scheduledSessions": 43,
+      "meanFatigue": 1.2,
+      "totalTherapyHours": 10.4,
+      "validatedSessions": 42,
+      "totalRecordedSessions": 42,
+      "complianceAverage": 99.1
+    },
+    "adherence": {
+      "rate": 98.0,
+      "category": "Excelente"
+    },
+    "riskAlert": {
+      "severity": "OPTIMAL",
+      "label": "Progreso Foveal Alto"
+    },
+    "lastSession": {
+      "timestampText": "Hoy, 10:05 AM",
+      "durationMinutes": 20,
+      "moduleName": "Protocolo Lectura"
+    },
+    "antecedents": {
+      "strokeDate": "14 de Abril, 2024",
+      "strokeType": "ACV Isquémico",
+      "affectedArtery": "PCA Derecha",
+      "motorDeficit": "Ninguno",
+      "cognitiveDeficit": "Ninguno",
+      "hypertension": false,
+      "diabetes": false,
+      "currentMedications": []
+    },
+    "activePlan": {
+      "prescribedDate": "12 de Octubre, 2024",
+      "exercises": []
+    },
+    "campimetryData": {
+      "leftEyeDefect": "HOMONYMOUS_LEFT",
+      "rightEyeDefect": "HOMONYMOUS_LEFT",
+      "fixationStabilityBCEA": 0.65,
+      "saccadicGain": 0.98,
+      "fovealSearchLatencyMs": 195
+    },
+    "sessionHistory": []
+  },
+  {
+    "id": "pat-006",
+    "initials": "SF",
+    "name": "Silvia Fernández T.",
+    "medicalRecordNumber": "#512944",
+    "nationalId": "06283910",
+    "age": 67,
+    "gender": "Femenino",
+    "affectedHemifield": "RIGHT",
+    "hemifieldDetail": "Cuadrantanopsia Inf",
+    "accountStatus": "PENDING",
+    "statusDetail": "Verificación biométrica",
+    "facility": "Hospital Nac. Edgardo Rebagliati Martins",
+    "shift": "Turno Mañana",
+    "phone": "+51 954 102 938",
+    "email": "silvia.fernandez@gmail.com",
+    "enrollmentDate": "22 de Octubre, 2024",
+    "treatingDoctor": {
+      "name": "Dra. Elena Ramos Morales, M.D.",
+      "specialty": "Neuroftalmología",
+      "idNumber": "CMP #4492 - RNE #2104",
+      "hospital": "Hospital Nac. Edgardo Rebagliati Martins"
+    },
+    "primaryDiagnosisTitle": "Cuadrantanopsia Inferior Derecha post-ACV Parietal",
+    "primaryDiagnosisDetail": "En proceso de validación biométrica y calibración ambiental",
+    "stats": {
+      "globalAdherence": 0,
+      "completedSessions": 0,
+      "scheduledSessions": 12,
+      "meanFatigue": 0,
+      "totalTherapyHours": 0,
+      "validatedSessions": 0,
+      "totalRecordedSessions": 0
+    },
+    "adherence": {
+      "rate": 0,
+      "category": "Deficiente"
+    },
+    "riskAlert": {
+      "severity": "PENDING",
+      "label": "En enrolamiento"
+    },
+    "lastSession": {
+      "timestampText": "Sin registro",
+      "durationMinutes": 0,
+      "moduleName": "Enrolamiento"
+    },
+    "antecedents": {
+      "strokeDate": "28 de Agosto, 2024",
+      "strokeType": "ACV Isquémico Parietal",
+      "affectedArtery": "Ramas de MCA izquierda",
+      "motorDeficit": "Leve apraxia constructiva",
+      "cognitiveDeficit": "En evaluación",
+      "hypertension": true,
+      "diabetes": false,
+      "currentMedications": []
+    },
+    "activePlan": {
+      "prescribedDate": "22 de Octubre, 2024",
+      "exercises": []
+    },
+    "campimetryData": {
+      "leftEyeDefect": "INFERIOR_QUADRANT",
+      "rightEyeDefect": "INFERIOR_QUADRANT",
+      "fixationStabilityBCEA": 1.1,
+      "saccadicGain": 0.85,
+      "fovealSearchLatencyMs": 290
+    },
+    "sessionHistory": []
+  },
+  {
+    "id": "pat-007",
+    "initials": "HC",
+    "name": "Hernán Castillo M.",
+    "medicalRecordNumber": "#741002",
+    "nationalId": "05882914",
+    "age": 73,
+    "gender": "Masculino",
+    "affectedHemifield": "LEFT",
+    "hemifieldDetail": "Hemianopsia Homónima",
+    "accountStatus": "ACTIVE",
+    "facility": "Hospital Nac. Edgardo Rebagliati Martins",
+    "shift": "Turno Mañana",
+    "phone": "+51 933 829 104",
+    "email": "hernan.castillo@gmail.com",
+    "enrollmentDate": "05 de Septiembre, 2024",
+    "treatingDoctor": {
+      "name": "Dra. Elena Ramos Morales, M.D.",
+      "specialty": "Neuroftalmología",
+      "idNumber": "CMP #4492 - RNE #2104",
+      "hospital": "Hospital Nac. Edgardo Rebagliati Martins"
+    },
+    "primaryDiagnosisTitle": "Hemianopsia Homónima Izquierda en Adulto Mayor",
+    "primaryDiagnosisDetail": "Fatigabilidad moderada a los 10 minutos de fijación continua",
+    "stats": {
+      "globalAdherence": 78.0,
+      "completedSessions": 16,
+      "scheduledSessions": 20,
+      "meanFatigue": 3.6,
+      "totalTherapyHours": 3.2,
+      "validatedSessions": 15,
+      "totalRecordedSessions": 16,
+      "complianceAverage": 82.0
+    },
+    "adherence": {
+      "rate": 78.0,
+      "category": "Moderada"
+    },
+    "riskAlert": {
+      "severity": "WARNING",
+      "label": "Fatiga Ocular Nivel 4"
+    },
+    "lastSession": {
+      "timestampText": "Hace 2 días",
+      "durationMinutes": 10,
+      "moduleName": "Compensación"
+    },
+    "antecedents": {
+      "strokeDate": "12 de Mayo, 2024",
+      "strokeType": "ACV Isquémico",
+      "affectedArtery": "PCA Derecha",
+      "motorDeficit": "Disminución de reflejos posturales",
+      "cognitiveDeficit": "Sin demencia",
+      "hypertension": true,
+      "diabetes": true,
+      "currentMedications": ["Enalapril 10mg", "Metformina 500mg"]
+    },
+    "activePlan": {
+      "prescribedDate": "10 de Septiembre, 2024",
+      "exercises": []
+    },
+    "campimetryData": {
+      "leftEyeDefect": "HOMONYMOUS_LEFT",
+      "rightEyeDefect": "HOMONYMOUS_LEFT",
+      "fixationStabilityBCEA": 1.25,
+      "saccadicGain": 0.82,
+      "fovealSearchLatencyMs": 310
+    },
+    "sessionHistory": []
+  }
+]
