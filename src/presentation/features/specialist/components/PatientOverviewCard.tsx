@@ -9,11 +9,30 @@ import {
 } from 'lucide-react';
 import type { Patient } from '../../../../core/domain/Patient';
 
-interface PatientOverviewCardProps {
-  patient: Patient;
+export interface TreatingDoctorOverview {
+  fullName?: string | null;
+  specialty?: string | null;
+  cmpNumber?: string | null;
+  hospital?: string | null;
 }
 
-export const PatientOverviewCard: React.FC<PatientOverviewCardProps> = ({ patient }) => {
+export interface PatientOverviewCardProps {
+  patient: Patient;
+  completedSessionsCount?: number;
+  scheduledSessionsCount?: number;
+  totalTherapyHours?: number;
+  adherenceRate?: number;
+  treatingDoctor?: TreatingDoctorOverview | null;
+}
+
+export const PatientOverviewCard: React.FC<PatientOverviewCardProps> = ({
+  patient,
+  completedSessionsCount,
+  scheduledSessionsCount,
+  totalTherapyHours,
+  adherenceRate,
+  treatingDoctor,
+}) => {
   const stats = patient.stats || {
     globalAdherence: patient.adherence.rate,
     completedSessions: 28,
@@ -24,12 +43,31 @@ export const PatientOverviewCard: React.FC<PatientOverviewCardProps> = ({ patien
     totalRecordedSessions: 28,
   };
 
-  const doctor = patient.treatingDoctor || {
-    name: 'Dra. Elena Ramos Morales, M.D.',
-    specialty: 'Neuroftalmología',
-    idNumber: 'CMP #4492',
-    hospital: patient.facility,
-  };
+  const completedSessions = completedSessionsCount ?? stats.completedSessions ?? 28;
+  const scheduledSessions = scheduledSessionsCount ?? stats.scheduledSessions ?? 30;
+  const therapyHours = totalTherapyHours !== undefined ? totalTherapyHours : (stats.totalTherapyHours ?? 5.6);
+  const globalAdherence = adherenceRate !== undefined ? adherenceRate : (stats.globalAdherence ?? patient.adherence.rate ?? 92);
+
+  const doctorName =
+    treatingDoctor?.fullName ||
+    patient.treatingDoctor?.name ||
+    'Dra. Elena Ramos Morales, M.D.';
+  const doctorSpecialty =
+    treatingDoctor?.specialty ||
+    patient.treatingDoctor?.specialty ||
+    'Neuroftalmología';
+  const doctorCmp =
+    treatingDoctor?.cmpNumber ||
+    patient.treatingDoctor?.idNumber;
+  const doctorHospital =
+    treatingDoctor?.hospital ||
+    patient.treatingDoctor?.hospital ||
+    patient.facility ||
+    'NeuroVisión Clinical';
+
+  const metaPercent = scheduledSessions > 0
+    ? Math.round((completedSessions / scheduledSessions) * 100)
+    : 100;
 
   return (
     <section className="bg-white rounded-xl border border-[#071524]/10 p-4 sm:p-6 md:p-7 shadow-xs">
@@ -76,14 +114,17 @@ export const PatientOverviewCard: React.FC<PatientOverviewCardProps> = ({ patien
             <Stethoscope className="w-4 h-4 text-[#006A62] shrink-0" />
             <div>
               <strong className="text-[#071524] font-semibold">Doctor tratante:</strong>{' '}
-              {doctor.name} ({doctor.specialty})
+              {doctorName} ({doctorSpecialty})
+              {doctorCmp && (
+                <span className="text-[#74777C] ml-1">· {doctorCmp}</span>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2">
             <Building2 className="w-4 h-4 text-[#006A62] shrink-0" />
             <div>
               <strong className="text-[#071524] font-semibold">Hospital Afiliado:</strong>{' '}
-              {patient.facility}
+              {doctorHospital}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -104,10 +145,11 @@ export const PatientOverviewCard: React.FC<PatientOverviewCardProps> = ({ patien
           </span>
           <div className="mt-1 flex items-baseline justify-between">
             <span className="text-2xl font-bold text-[#071524]">
-              {stats.globalAdherence}%
+              {globalAdherence}%
             </span>
             <span className="inline-flex items-center text-xs font-bold text-[#006A62]">
-              <TrendingUp className="w-3.5 h-3.5 mr-0.5" /> Óptima
+              <TrendingUp className="w-3.5 h-3.5 mr-0.5" />
+              {globalAdherence >= 80 ? 'Óptima' : globalAdherence >= 60 ? 'Aceptable' : 'Subóptima'}
             </span>
           </div>
         </div>
@@ -118,11 +160,11 @@ export const PatientOverviewCard: React.FC<PatientOverviewCardProps> = ({ patien
           </span>
           <div className="mt-1 flex items-baseline justify-between">
             <span className="text-2xl font-bold text-[#071524]">
-              {stats.completedSessions}{' '}
-              <span className="text-sm font-normal text-[#44474C]">/ {stats.scheduledSessions}</span>
+              {completedSessions}{' '}
+              <span className="text-sm font-normal text-[#44474C]">/ {scheduledSessions}</span>
             </span>
             <span className="text-xs font-semibold text-[#44474C]">
-              {Math.round((stats.completedSessions / Math.max(1, stats.scheduledSessions)) * 100)}% meta
+              {metaPercent}% meta
             </span>
           </div>
         </div>
@@ -148,7 +190,7 @@ export const PatientOverviewCard: React.FC<PatientOverviewCardProps> = ({ patien
           </span>
           <div className="mt-1 flex items-baseline justify-between">
             <span className="text-2xl font-bold text-[#071524]">
-              {stats.totalTherapyHours}{' '}
+              {typeof therapyHours === 'number' ? therapyHours.toFixed(1) : therapyHours}{' '}
               <span className="text-sm font-normal text-[#44474C]">horas</span>
             </span>
             <span className="text-xs font-semibold text-[#44474C]">Acumuladas</span>

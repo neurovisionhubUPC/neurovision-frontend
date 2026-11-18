@@ -7,9 +7,22 @@ import { useRef, useState, useCallback, useEffect } from 'react';
  */
 
 export const useWebcam = () => {
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const attachVideoElement = useCallback((el: HTMLVideoElement | null) => {
+    videoRef.current = el;
+    if (el && streamRef.current && el.srcObject !== streamRef.current) {
+      el.srcObject = streamRef.current;
+      el.onloadedmetadata = () => {
+        void el.play().catch(() => undefined);
+        setIsStreaming(true);
+      };
+      void el.play().catch(() => undefined);
+    }
+  }, []);
 
   const startWebcam = useCallback(async (deviceId?: string) => {
     try {
@@ -21,6 +34,10 @@ export const useWebcam = () => {
       }
 
       // Detener stream previo si existe antes de cambiar de cámara
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
       if (videoRef.current && videoRef.current.srcObject) {
         const prevStream = videoRef.current.srcObject as MediaStream;
         prevStream.getTracks().forEach(track => track.stop());
@@ -39,14 +56,18 @@ export const useWebcam = () => {
 
       // Solicitud del stream. Este objeto `stream` es un puntero en RAM a los buffers de hardware.
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = stream;
       
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         
         videoRef.current.onloadedmetadata = () => {
-          videoRef.current?.play();
+          void videoRef.current?.play().catch(() => undefined);
           setIsStreaming(true);
         };
+        void videoRef.current.play().catch(() => undefined);
+      } else {
+        setIsStreaming(true);
       }
     } catch (err: any) {
       setError(err.message || 'Permiso de cámara denegado o dispositivo no encontrado.');
@@ -55,6 +76,10 @@ export const useWebcam = () => {
   }, []);
 
   const stopWebcam = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
     if (videoRef.current && videoRef.current.srcObject) {
       const stream = videoRef.current.srcObject as MediaStream;
       
@@ -64,8 +89,8 @@ export const useWebcam = () => {
       });
       
       videoRef.current.srcObject = null;
-      setIsStreaming(false);
     }
+    setIsStreaming(false);
   }, []);
 
   // Validación 4: Garbage Collection y limpieza preventiva al desmontar el componente.
@@ -77,6 +102,7 @@ export const useWebcam = () => {
 
   return {
     videoRef,
+    attachVideoElement,
     isStreaming,
     error,
     startWebcam,

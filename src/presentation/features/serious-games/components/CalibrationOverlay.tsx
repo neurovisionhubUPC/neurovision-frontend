@@ -7,6 +7,7 @@ export const CalibrationOverlay: React.FC = () => {
   const { currentPointIndex, nextPoint, processedMetrics, completeCalibration, isPreCalibrating } = useCalibrationStore();
   const setGamePhase = useAppStore(state => state.setGamePhase);
   const [progress, setProgress] = useState(0);
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
     if (isPreCalibrating) return; // Esperar a que el usuario presione el botón
@@ -21,10 +22,10 @@ export const CalibrationOverlay: React.FC = () => {
       return;
     }
 
-    // Cada punto dura exactamente 2 segundos.
-    const pointDurationMs = 2000;
+    // Cada punto dura 2.2 segundos (550ms de transición sacádica + 1650ms de captura foveal limpia).
+    const pointDurationMs = 2200;
     const interval = 50; // Update progress bar every 50ms
-    const saccadicLatencyMs = 500; // Descarte de Latencia Sacádica Inicial (Chhimpa et al., 2024)
+    const saccadicLatencyMs = 550; // Descarte de Latencia Sacádica Inicial (Chhimpa et al., 2024)
     let elapsed = 0;
 
     // Purgamos samples residuales del punto anterior
@@ -34,7 +35,7 @@ export const CalibrationOverlay: React.FC = () => {
       elapsed += interval;
       setProgress((elapsed / pointDurationMs) * 100);
 
-      // Descarte de sacada inicial (500 ms): Purgamos los datos mientras el ojo saltaba al objetivo
+      // Descarte de sacada inicial (550 ms): Purgamos los datos mientras el ojo saltaba al objetivo
       if (elapsed === saccadicLatencyMs) {
         useCalibrationStore.setState({ rawSamples: [] });
       }
@@ -45,18 +46,21 @@ export const CalibrationOverlay: React.FC = () => {
         const currentSamples = useCalibrationStore.getState().rawSamples;
         const result = processFixationSamples(currentSamples);
         if (result) {
+          setProgress(0);
           nextPoint(result);
         } else {
-          // Si no hay suficientes samples válidos (ej. parpadeo prolongado), reintentamos el punto
+          // Si no hay suficientes samples válidos (ej. parpadeo prolongado o cambio de elemento video),
+          // reintentamos el punto reiniciando el temporizador de forma reactiva.
           console.warn("Muestras insuficientes o parpadeo continuo. Reintentando punto...");
           setProgress(0);
           useCalibrationStore.setState({ rawSamples: [] });
+          setRetryCount((c) => c + 1);
         }
       }
     }, interval);
 
     return () => clearInterval(timer);
-  }, [currentPointIndex, processedMetrics, nextPoint, completeCalibration, setGamePhase, isPreCalibrating]);
+  }, [currentPointIndex, retryCount, processedMetrics, nextPoint, completeCalibration, setGamePhase, isPreCalibrating]);
 
   if (currentPointIndex >= CALIBRATION_POINTS.length) return null;
   if (isPreCalibrating) return null; // No mostrar puntos aún
@@ -66,13 +70,15 @@ export const CalibrationOverlay: React.FC = () => {
   return (
     <div className="absolute inset-0 bg-hc-black/90 z-40 flex items-center justify-center pointer-events-auto">
       <div className="text-hc-white absolute top-10 text-center">
-        <h2 className="text-3xl font-bold text-hc-yellow mb-2">Calibración Oculomotora</h2>
-        <p className="text-xl">Mira fijamente el punto rojo central durante 2 segundos.</p>
-        <p className="text-hc-gray mt-2">Punto {currentPointIndex + 1} de 5</p>
+        <h2 className="text-3xl font-bold text-hc-yellow mb-2">Calibración Oculomotora de Alta Precisión</h2>
+        <p className="text-xl">Mira fijamente el punto blanco en el centro del círculo rojo sin mover la cabeza.</p>
+        <p className="text-hc-gray mt-2">
+          Punto {currentPointIndex + 1} de {CALIBRATION_POINTS.length}
+        </p>
       </div>
 
       <div 
-        className="absolute w-12 h-12 -ml-6 -mt-6 rounded-full bg-red-600 shadow-[0_0_20px_rgba(220,38,38,0.8)] flex items-center justify-center transition-all duration-300"
+        className="absolute w-12 h-12 -ml-6 -mt-6 rounded-full bg-red-600 shadow-[0_0_24px_rgba(220,38,38,0.85)] flex items-center justify-center transition-all duration-200"
         style={{ 
           left: `${currentPoint.x * 100}%`, 
           top: `${currentPoint.y * 100}%` 
@@ -92,9 +98,12 @@ export const CalibrationOverlay: React.FC = () => {
           />
         </svg>
 
-        {/* Temporizador numérico en el centro */}
-        <span className="text-white font-bold text-xs">
-          {progress < 75 ? (2 - (progress / 100) * 2).toFixed(1) + 's' : 'OK'}
+        {/* Punto de anclaje foveal exacto en el centro */}
+        <div className="w-2.5 h-2.5 rounded-full bg-white shadow-[0_0_6px_#ffffff]" />
+
+        {/* Temporizador numérico debajo del objetivo */}
+        <span className="absolute -bottom-6 text-white font-bold text-[11px] font-mono">
+          {progress < 80 ? (2.2 - (progress / 100) * 2.2).toFixed(1) + 's' : 'OK'}
         </span>
       </div>
     </div>

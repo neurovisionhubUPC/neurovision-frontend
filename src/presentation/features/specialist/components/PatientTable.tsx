@@ -15,7 +15,8 @@ import {
   ChevronRight, 
   CloudCheck,
   Star,
-  Frown
+  Frown,
+  Eye
 } from 'lucide-react';
 import type { Patient } from '../../../../core/domain/Patient';
 
@@ -26,6 +27,7 @@ interface PatientTableProps {
   onOpenAnalytics: (patient: Patient) => void;
   onContactPatient: (patient: Patient) => void;
   onResendSMS: (patient: Patient) => void;
+  onQuickViewPatient?: (patient: Patient) => void;
 }
 
 export const PatientTable: React.FC<PatientTableProps> = ({
@@ -35,7 +37,25 @@ export const PatientTable: React.FC<PatientTableProps> = ({
   onOpenAnalytics,
   onContactPatient,
   onResendSMS,
+  onQuickViewPatient,
 }) => {
+  const [currentPage, setCurrentPage] = React.useState(1);
+  const pageSize = 5;
+
+  // Reset to page 1 if filtered list changes and currentPage exceeds totalPages
+  const totalPages = Math.max(1, Math.ceil(patients.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const startIdx = (safePage - 1) * pageSize;
+  const paginatedPatients = patients.slice(startIdx, startIdx + pageSize);
+
+  const handleQuickView = (patient: Patient) => {
+    if (onQuickViewPatient) {
+      onQuickViewPatient(patient);
+    } else {
+      onContactPatient(patient);
+    }
+  };
+
   return (
     <section className="bg-white rounded-xl border border-[#071524]/10 overflow-hidden shadow-xs flex flex-col">
       <div className="overflow-x-auto">
@@ -55,14 +75,14 @@ export const PatientTable: React.FC<PatientTableProps> = ({
             </tr>
           </thead>
           <tbody className="divide-y divide-[#071524]/5 font-normal text-[#071E27]">
-            {patients.length === 0 ? (
+            {paginatedPatients.length === 0 ? (
               <tr>
                 <td colSpan={8} className="py-12 text-center text-[#74777C]">
                   No se encontraron pacientes con los filtros seleccionados.
                 </td>
               </tr>
             ) : (
-              patients.map((patient) => {
+              paginatedPatients.map((patient) => {
                 const isCritical = patient.riskAlert.severity === 'CRITICAL';
                 const isPending = patient.accountStatus === 'PENDING';
                 const isLeftHemifield = patient.affectedHemifield === 'LEFT';
@@ -90,6 +110,7 @@ export const PatientTable: React.FC<PatientTableProps> = ({
                         </div>
                         <div>
                           <button
+                            type="button"
                             onClick={() => onSelectPatient(patient)}
                             className="font-bold text-[#071524] text-sm hover:underline cursor-pointer flex items-center gap-1.5 text-left"
                           >
@@ -107,7 +128,9 @@ export const PatientTable: React.FC<PatientTableProps> = ({
 
                     {/* Edad / Sexo */}
                     <td className="py-3.5 px-3">
-                      <span className="font-semibold text-[#071524]">{patient.age} años</span>
+                      <span className="font-semibold text-[#071524]">
+                        {patient.age > 0 ? `${patient.age} años` : 'No especificada'}
+                      </span>
                       <span className="text-[#44474C] text-[11px] block">{patient.gender}</span>
                     </td>
 
@@ -126,7 +149,7 @@ export const PatientTable: React.FC<PatientTableProps> = ({
                           </>
                         )}
                       </span>
-                      <span className="block text-[10px] text-[#44474C] mt-0.5 font-medium">
+                      <span className="block text-[10px] text-[#44474C] mt-0.5 font-medium max-w-[150px] truncate" title={patient.hemifieldDetail}>
                         {patient.hemifieldDetail}
                       </span>
                     </td>
@@ -227,7 +250,7 @@ export const PatientTable: React.FC<PatientTableProps> = ({
                           <Clock className="w-3 h-3 text-[#6F3800]" />
                           {patient.riskAlert.label}
                         </span>
-                      ) : patient.riskAlert.label.includes('Progreso') ? (
+                      ) : patient.riskAlert.label.includes('Progreso') || patient.riskAlert.severity === 'OPTIMAL' ? (
                         <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#006A62] bg-[#DBF1FE] px-2 py-0.5 rounded">
                           <Star className="w-3 h-3 text-[#006A62]" />
                           {patient.riskAlert.label}
@@ -243,19 +266,32 @@ export const PatientTable: React.FC<PatientTableProps> = ({
                     {/* Acciones Clínicas */}
                     <td className="py-3.5 px-4 text-right">
                       <div className="inline-flex items-center gap-1">
+                        {/* Botón de Vista Rápida para cualquier paciente */}
+                        <button
+                          type="button"
+                          onClick={() => handleQuickView(patient)}
+                          className="p-1.5 rounded-lg hover:bg-[#DBF1FE] text-[#006A62] transition-colors cursor-pointer"
+                          title="Vista Rápida del Paciente"
+                          aria-label="Vista Rápida"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+
                         {isCritical ? (
                           <>
                             <button
+                              type="button"
                               onClick={() => onContactPatient(patient)}
-                              className="px-2.5 py-1 rounded-lg bg-[#BA1A1A] text-white font-semibold text-xs hover:bg-[#93000A] transition-colors flex items-center gap-1 shadow-xs"
+                              className="px-2.5 py-1 rounded-lg bg-[#BA1A1A] text-white font-semibold text-xs hover:bg-[#93000A] transition-colors flex items-center gap-1 shadow-xs cursor-pointer"
                               title="Contactar Paciente / Protocolo de Rescate"
                             >
                               <PhoneCall className="w-3.5 h-3.5" />
                               Contactar
                             </button>
                             <button
+                              type="button"
                               onClick={() => onPrescribePlan(patient)}
-                              className="p-1.5 rounded-lg hover:bg-[#E6F6FF] text-[#071524] transition-colors"
+                              className="p-1.5 rounded-lg hover:bg-[#E6F6FF] text-[#071524] transition-colors cursor-pointer"
                               title="Modificar Umbral de Dificultad"
                             >
                               <Sliders className="w-4 h-4" />
@@ -264,16 +300,18 @@ export const PatientTable: React.FC<PatientTableProps> = ({
                         ) : isPending ? (
                           <>
                             <button
+                              type="button"
                               onClick={() => onResendSMS(patient)}
-                              className="px-2.5 py-1 rounded-lg bg-[#F3FAFF] border border-[#C4C6CC]/60 text-[#071524] font-semibold text-xs hover:bg-[#DBF1FE] transition-colors flex items-center gap-1"
-                              title="Reenviar Código de Activación"
+                              className="px-2.5 py-1 rounded-lg bg-[#F3FAFF] border border-[#C4C6CC]/60 text-[#071524] font-semibold text-xs hover:bg-[#DBF1FE] transition-colors flex items-center gap-1 cursor-pointer"
+                              title="Gestionar Invitación / Reenviar Credenciales"
                             >
                               <Send className="w-3.5 h-3.5 text-[#006A62]" />
-                              Reenviar SMS
+                              Gestionar Invitación
                             </button>
                             <button
+                              type="button"
                               onClick={() => onSelectPatient(patient)}
-                              className="p-1.5 rounded-lg hover:bg-[#E6F6FF] text-[#071524] transition-colors"
+                              className="p-1.5 rounded-lg hover:bg-[#E6F6FF] text-[#071524] transition-colors cursor-pointer"
                               title="Expediente Clínico"
                             >
                               <FileText className="w-4 h-4" />
@@ -282,22 +320,25 @@ export const PatientTable: React.FC<PatientTableProps> = ({
                         ) : (
                           <>
                             <button
+                              type="button"
                               onClick={() => onSelectPatient(patient)}
-                              className="p-1.5 rounded-lg hover:bg-[#E6F6FF] text-[#071524] hover:text-[#006A62] transition-colors"
+                              className="p-1.5 rounded-lg hover:bg-[#E6F6FF] text-[#071524] hover:text-[#006A62] transition-colors cursor-pointer"
                               title="Ver Expediente Completo"
                             >
                               <FileText className="w-4 h-4" />
                             </button>
                             <button
+                              type="button"
                               onClick={() => onPrescribePlan(patient)}
-                              className="p-1.5 rounded-lg hover:bg-[#E6F6FF] text-[#071524] hover:text-[#006A62] transition-colors"
+                              className="p-1.5 rounded-lg hover:bg-[#E6F6FF] text-[#071524] hover:text-[#006A62] transition-colors cursor-pointer"
                               title="Prescribir / Modificar Plan"
                             >
                               <Sliders className="w-4 h-4" />
                             </button>
                             <button
+                              type="button"
                               onClick={() => onOpenAnalytics(patient)}
-                              className="p-1.5 rounded-lg hover:bg-[#E6F6FF] text-[#071524] hover:text-[#006A62] transition-colors"
+                              className="p-1.5 rounded-lg hover:bg-[#E6F6FF] text-[#071524] hover:text-[#006A62] transition-colors cursor-pointer"
                               title="Analítica Sacádica"
                             >
                               <Activity className="w-4 h-4" />
@@ -317,32 +358,44 @@ export const PatientTable: React.FC<PatientTableProps> = ({
       {/* Table Footer & Pagination */}
       <div className="bg-[#E6F6FF] px-4 py-3 border-t border-[#071524]/10 flex flex-col sm:flex-row items-center justify-between gap-3">
         <div className="text-xs text-[#44474C] font-medium">
-          Mostrando <span className="font-bold text-[#071524]">{patients.length > 0 ? 1 : 0} - {patients.length}</span> de{' '}
-          <span className="font-bold text-[#071524]">24</span> pacientes registrados
+          Mostrando{' '}
+          <span className="font-bold text-[#071524]">
+            {patients.length > 0 ? startIdx + 1 : 0} - {Math.min(startIdx + pageSize, patients.length)}
+          </span>{' '}
+          de <span className="font-bold text-[#071524]">{patients.length}</span> pacientes filtrados
         </div>
 
         {/* Pagination Buttons */}
         <div className="flex items-center gap-1 text-xs">
           <button
-            disabled
-            className="px-2.5 py-1.5 rounded-lg border border-[#C4C6CC]/60 bg-white text-[#74777C] disabled:opacity-50 transition-colors flex items-center gap-1 cursor-not-allowed"
+            type="button"
+            disabled={safePage <= 1}
+            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+            className="px-2.5 py-1.5 rounded-lg border border-[#C4C6CC]/60 bg-white text-[#071524] hover:bg-[#DBF1FE] disabled:opacity-50 transition-colors flex items-center gap-1 disabled:cursor-not-allowed cursor-pointer"
           >
             <ChevronLeft className="w-3.5 h-3.5" />
             Anterior
           </button>
-          <button className="w-8 h-8 rounded-lg bg-[#071524] text-white font-bold flex items-center justify-center">
-            1
-          </button>
-          <button className="w-8 h-8 rounded-lg bg-white border border-[#C4C6CC]/60 text-[#071524] hover:bg-[#DBF1FE] flex items-center justify-center font-medium transition-colors">
-            2
-          </button>
-          <button className="w-8 h-8 rounded-lg bg-white border border-[#C4C6CC]/60 text-[#071524] hover:bg-[#DBF1FE] flex items-center justify-center font-medium transition-colors">
-            3
-          </button>
-          <button className="w-8 h-8 rounded-lg bg-white border border-[#C4C6CC]/60 text-[#071524] hover:bg-[#DBF1FE] flex items-center justify-center font-medium transition-colors">
-            4
-          </button>
-          <button className="px-2.5 py-1.5 rounded-lg border border-[#C4C6CC]/60 bg-white text-[#071524] hover:bg-[#DBF1FE] transition-colors flex items-center gap-1">
+          {Array.from({ length: totalPages }, (_, idx) => idx + 1).map((pageNum) => (
+            <button
+              type="button"
+              key={pageNum}
+              onClick={() => setCurrentPage(pageNum)}
+              className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
+                safePage === pageNum
+                  ? 'bg-[#071524] text-white font-bold'
+                  : 'bg-white border border-[#C4C6CC]/60 text-[#071524] hover:bg-[#DBF1FE] font-medium'
+              }`}
+            >
+              {pageNum}
+            </button>
+          ))}
+          <button
+            type="button"
+            disabled={safePage >= totalPages}
+            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+            className="px-2.5 py-1.5 rounded-lg border border-[#C4C6CC]/60 bg-white text-[#071524] hover:bg-[#DBF1FE] disabled:opacity-50 transition-colors flex items-center gap-1 disabled:cursor-not-allowed cursor-pointer"
+          >
             Siguiente
             <ChevronRight className="w-3.5 h-3.5" />
           </button>

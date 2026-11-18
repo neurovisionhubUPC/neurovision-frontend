@@ -11,31 +11,41 @@ import {
   ChevronDown, 
   Info,
   AlertTriangle,
-  ShieldAlert
+  ShieldAlert,
+  MousePointer2,
+  PhoneCall,
+  X,
+  Activity,
+  Video,
 } from 'lucide-react';
 import { useEnvironmentalValidation } from '../../../../infrastructure/cv/hooks/useEnvironmentalValidation';
 
 interface PreCalibrationViewProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
+  attachVideoElement?: (el: HTMLVideoElement | null) => void;
   pipCanvasRef: React.RefObject<HTMLCanvasElement | null>;
   isStreaming: boolean;
   onStartCalibration: () => void;
   onRetryCamera: (deviceId?: string) => void;
   rawMetricsRef: React.RefObject<any>;
   fps?: number;
+  onEnableMouseFallback?: () => void;
 }
 
 export const PreCalibrationView: React.FC<PreCalibrationViewProps> = ({
   videoRef,
+  attachVideoElement,
   pipCanvasRef,
   isStreaming,
   onStartCalibration,
   onRetryCamera,
   rawMetricsRef,
-  fps = 60
+  fps = 60,
+  onEnableMouseFallback,
 }) => {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<string>('');
+  const [showAssistModal, setShowAssistModal] = useState<boolean>(false);
 
   // Validación y Telemetría en tiempo real de luz, tapa y distancia (Zero Lag via Ref)
   const validation = useEnvironmentalValidation(videoRef, isStreaming, rawMetricsRef);
@@ -55,8 +65,19 @@ export const PreCalibrationView: React.FC<PreCalibrationViewProps> = ({
         console.warn('No se pudieron listar cámaras:', err);
       }
     }
-    getDevices();
+    void getDevices();
   }, [selectedDevice]);
+
+  // Listener para cerrar modal con Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && showAssistModal) {
+        setShowAssistModal(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showAssistModal]);
 
   const handleDeviceChange = (deviceId: string) => {
     setSelectedDevice(deviceId);
@@ -110,7 +131,7 @@ export const PreCalibrationView: React.FC<PreCalibrationViewProps> = ({
 
             {/* Video Stream Element */}
             <video
-              ref={videoRef}
+              ref={attachVideoElement ?? videoRef}
               playsInline
               muted
               autoPlay
@@ -406,7 +427,8 @@ export const PreCalibrationView: React.FC<PreCalibrationViewProps> = ({
       {/* Bottom Actions Bar */}
       <div className="pt-4 flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-[#DCEBF4]">
         <button
-          onClick={() => alert('Soporte de asistencia en camino por WhatsApp o Teléfono...')}
+          type="button"
+          onClick={() => setShowAssistModal(true)}
           className="w-full sm:w-auto inline-flex items-center justify-center space-x-2 bg-white hover:bg-neutral-50 text-[#1C2A39] border-2 border-[#1C2A39] px-6 py-3.5 rounded-xl font-bold text-sm shadow-2xs transition-all active:scale-95"
         >
           <HelpCircle size={18} />
@@ -427,6 +449,205 @@ export const PreCalibrationView: React.FC<PreCalibrationViewProps> = ({
           <ArrowRight size={19} />
         </button>
       </div>
+
+      {/* Modal Interactivo de Diagnóstico Ambiental y Asistencia */}
+      {showAssistModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="assist-modal-title"
+          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto animate-in fade-in duration-200"
+        >
+          <div className="bg-white border-2 border-[#26A69A] text-[#1C2A39] max-w-3xl w-full rounded-2xl p-6 sm:p-8 space-y-6 shadow-2xl relative my-auto max-h-[90vh] overflow-y-auto">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between gap-4 border-b border-[#E2EEF5] pb-4">
+              <div className="space-y-1">
+                <span className="inline-flex items-center gap-1.5 bg-[#DCF8F2] text-[#0F6F62] px-3 py-0.5 rounded text-xs font-bold uppercase tracking-wider">
+                  <Activity size={14} /> Telemetría Diagnóstica en Vivo
+                </span>
+                <h2 id="assist-modal-title" className="text-2xl font-extrabold text-[#1C2A39]">
+                  Diagnóstico Ambiental y Asistencia Técnica
+                </h2>
+                <p className="text-xs sm:text-sm text-[#455A64]">
+                  Revisa el estado de cada sensor y ajusta tu postura o entorno según las recomendaciones clínicas.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowAssistModal(false)}
+                aria-label="Cerrar diagnóstico"
+                className="text-[#455A64] hover:text-[#1C2A39] p-2 rounded-xl hover:bg-[#F3FAFF] transition-all"
+              >
+                <X size={22} />
+              </button>
+            </div>
+
+            {/* 3 Live Sensor Diagnostics Cards */}
+            <div className="space-y-3.5">
+              {/* Sensor 1: Cámara */}
+              <div className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                camera.passed ? 'bg-[#F0FDF9] border-[#A7E7DC]' : 'bg-[#FEF2F2] border-[#FECACA]'
+              }`}>
+                <div className="flex items-start space-x-3">
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                    camera.passed ? 'bg-[#DCF8F2] text-[#0F6F62]' : 'bg-red-100 text-red-600'
+                  }`}>
+                    <Video size={20} />
+                  </div>
+                  <div>
+                    <div className="flex items-center space-x-2">
+                      <h4 className="font-bold text-sm text-[#1C2A39]">1. Sensor de Cámara</h4>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                        camera.passed ? 'bg-[#DCF8F2] text-[#0F6F62]' : 'bg-red-100 text-red-700'
+                      }`}>
+                        {camera.label}
+                      </span>
+                    </div>
+                    <p className="text-xs text-[#455A64] mt-0.5">
+                      {camera.isCovered
+                        ? 'La cámara está cubierta físicamente. Retira la tapa del sensor o la cinta de privacidad.'
+                        : !isStreaming
+                        ? 'El navegador aún no tiene permiso de video o no hay flujo activo.'
+                        : camera.passed
+                        ? `Video fluido a ${fps} FPS. Lente despejado y funcionando.`
+                        : camera.description}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => onRetryCamera(selectedDevice)}
+                  className="px-3 py-1.5 bg-white border border-[#D5E5EF] hover:bg-[#F3FAFF] rounded-lg text-xs font-bold text-[#1C2A39] shrink-0 self-start sm:self-center transition-all"
+                >
+                  Reiniciar
+                </button>
+              </div>
+
+              {/* Sensor 2: Iluminación */}
+              <div className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                lighting.passed ? 'bg-[#F0FDF9] border-[#A7E7DC]' : 'bg-[#FFFBEB] border-[#FDE68A]'
+              }`}>
+                <div className="flex items-start space-x-3">
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                    lighting.passed ? 'bg-[#DCF8F2] text-[#0F6F62]' : 'bg-amber-100 text-amber-700'
+                  }`}>
+                    <Sun size={20} />
+                  </div>
+                  <div>
+                    <div className="flex items-center space-x-2">
+                      <h4 className="font-bold text-sm text-[#1C2A39]">2. Iluminación de la Habitación</h4>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                        lighting.passed ? 'bg-[#DCF8F2] text-[#0F6F62]' : 'bg-amber-100 text-amber-700'
+                      }`}>
+                        {lighting.lux} Lux (Objetivo: 250 - 550 Lux)
+                      </span>
+                    </div>
+                    <p className="text-xs text-[#455A64] mt-0.5">
+                      {lighting.status === 'LOW'
+                        ? 'La habitación está oscura. Enciende una luz frontal o indirecta para iluminar tu rostro.'
+                        : lighting.status === 'EXCESSIVE'
+                        ? 'Demasiada luz de fondo o reflejo. Cierra cortinas o apaga focos directos detrás de ti.'
+                        : 'Luz ambiental óptima. Se detecta contraste suficiente en los globos oculares.'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Sensor 3: Distancia */}
+              <div className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                distance.passed ? 'bg-[#F0FDF9] border-[#A7E7DC]' : 'bg-[#FFFBEB] border-[#FDE68A]'
+              }`}>
+                <div className="flex items-start space-x-3">
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                    distance.passed ? 'bg-[#DCF8F2] text-[#0F6F62]' : 'bg-amber-100 text-amber-700'
+                  }`}>
+                    <Layers size={20} />
+                  </div>
+                  <div>
+                    <div className="flex items-center space-x-2">
+                      <h4 className="font-bold text-sm text-[#1C2A39]">3. Distancia Facial al Monitor</h4>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                        distance.passed ? 'bg-[#DCF8F2] text-[#0F6F62]' : 'bg-amber-100 text-amber-700'
+                      }`}>
+                        {distance.hasFace ? `${distance.distanceCm} cm` : 'Sin rostro'} (Objetivo: 40 - 60 cm)
+                      </span>
+                    </div>
+                    <p className="text-xs text-[#455A64] mt-0.5">
+                      {!distance.hasFace
+                        ? 'Ubica tu rostro dentro del contorno ovalado para que el detector reconozca tus ojos.'
+                        : distance.status === 'TOO_CLOSE'
+                        ? `Estás demasiado cerca (${distance.distanceCm} cm). Aléjate unos 10 cm del monitor.`
+                        : distance.status === 'TOO_FAR'
+                        ? `Estás demasiado lejos (${distance.distanceCm} cm). Acércate suavemente al monitor.`
+                        : `Distancia óptima recomendada (${distance.distanceCm} cm).`}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Alternativa: Modo Simulación con Ratón */}
+            <div className="bg-[#F0F8FD] border border-[#CDE9FA] rounded-xl p-4 sm:p-5 space-y-3">
+              <div className="flex items-start space-x-3">
+                <div className="w-9 h-9 rounded-lg bg-[#1C2A39] text-[#8AE2D6] flex items-center justify-center shrink-0">
+                  <MousePointer2 size={18} />
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm text-[#1C2A39]">
+                    ¿Problemas con la cámara o prefieres practicar primero?
+                  </h4>
+                  <p className="text-xs text-[#455A64] mt-0.5 leading-relaxed">
+                    Puedes continuar la terapia en <strong>Modo Simulación (Mouse)</strong>. La mirada se emulará mediante el cursor de tu ratón para que no pierdas tu sesión diaria prescrita.
+                  </p>
+                </div>
+              </div>
+
+              {onEnableMouseFallback && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAssistModal(false);
+                    onEnableMouseFallback();
+                  }}
+                  className="w-full sm:w-auto px-5 py-2.5 bg-[#1C2A39] hover:bg-[#131F2B] text-white rounded-xl text-xs font-bold flex items-center justify-center space-x-2 transition-all active:scale-95"
+                >
+                  <MousePointer2 size={15} />
+                  <span>Continuar en Modo Simulación (Mouse)</span>
+                </button>
+              )}
+            </div>
+
+            {/* Soporte Humano / Contacto */}
+            <div className="bg-[#FFF4E5] border border-[#FFE2C2] rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+              <div className="flex items-center space-x-2.5 text-[#B85D19]">
+                <PhoneCall size={18} className="shrink-0" />
+                <span>
+                  <strong>Contacto con Especialista Clínico:</strong> Central Telerehab +51 999 888 777 (Lun-Vie 8am-6pm)
+                </span>
+              </div>
+              <a
+                href="tel:+51999888777"
+                className="px-4 py-2 bg-[#B85D19] hover:bg-[#974911] text-white font-bold rounded-lg text-xs text-center shrink-0 transition-all"
+              >
+                Llamar Ahora
+              </a>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="pt-2 flex justify-end gap-3 border-t border-[#E2EEF5]">
+              <button
+                type="button"
+                onClick={() => setShowAssistModal(false)}
+                className="px-6 py-2.5 rounded-xl border border-[#D5E5EF] text-xs font-bold text-[#1C2A39] hover:bg-[#F3FAFF] transition-all"
+              >
+                Cerrar Diagnóstico
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

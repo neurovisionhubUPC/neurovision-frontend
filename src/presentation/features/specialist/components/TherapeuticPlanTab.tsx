@@ -1,30 +1,542 @@
-import React, { useState } from 'react';
-import { 
-  Sliders, 
-  Target, 
-  Sparkles, 
-  Save, 
-  CheckCircle2, 
-  Zap, 
-  Clock 
+import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  Sliders,
+  Target,
+  Sparkles,
+  Save,
+  CheckCircle2,
+  Zap,
+  Clock,
+  ExternalLink,
+  Layers,
+  Shield,
+  AlertCircle,
+  Loader2,
+  PlusCircle,
 } from 'lucide-react';
 import type { Patient } from '../../../../core/domain/Patient';
 import { useAppStore } from '../../../../core/store/useAppStore';
+import {
+  clinicalApi,
+  extractApiErrorMessage,
+  type EffectiveTherapeuticConfiguration,
+  type TherapyCompletionTarget,
+  type TherapyExerciseCode,
+  type TherapyPlanDetailResponse,
+  type TherapyPlanStatus,
+  type TherapyPlanSummary,
+} from '../../../../infrastructure/api';
 
 interface TherapeuticPlanTabProps {
   patient: Patient;
   onPlanUpdated?: () => void;
+  plans?: TherapyPlanSummary[];
+  activePlanDetail?: TherapyPlanDetailResponse | null;
+  plansLoading?: boolean;
+  plansError?: string | null;
+  onSelectPlan?: (therapyPlanId: string) => void;
 }
 
-export const TherapeuticPlanTab: React.FC<TherapeuticPlanTabProps> = ({ 
+const EXERCISE_LABELS: Record<TherapyExerciseCode, string> = {
+  'visual-scanning': 'Exploración Sacádica (Visual Scanning)',
+  'visual-search': 'Búsqueda Visual (Visual Search)',
+  fixation: 'Fijación Sostenida (Fixation)',
+};
+
+function getPlanStatusBadge(status: TherapyPlanStatus): { label: string; className: string } {
+  if (status === 'ACTIVE') {
+    return { label: 'ACTIVO', className: 'bg-[#81F3E5] text-[#005049]' };
+  }
+  if (status === 'SUSPENDED') {
+    return { label: 'SUSPENDIDO', className: 'bg-[#FFDCC4] text-[#6F3800]' };
+  }
+  return { label: 'CANCELADO', className: 'bg-[#FFDAD6] text-[#93000A]' };
+}
+
+function formatDateTime(iso: string): string {
+  try {
+    const parsed = new Date(iso);
+    if (Number.isNaN(parsed.getTime())) return iso;
+    return parsed.toLocaleString('es-PE', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function extractCompletionTarget(
+  cfg: EffectiveTherapeuticConfiguration
+): TherapyCompletionTarget | null {
+  if (cfg.parameterSchemaVersion === 2) {
+    return cfg.parameters.completionTarget;
+  }
+  return null;
+}
+
+function renderConfigurationDetails(cfg: EffectiveTherapeuticConfiguration): React.ReactNode {
+  if (cfg.exerciseCode === 'visual-scanning') {
+    const p = cfg.parameterSchemaVersion === 2 ? cfg.parameters.parameters : cfg.parameters;
+    return (
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+        <div className="p-2 rounded bg-[#F3FAFF]">
+          <span className="text-[#44474C] block">Modo</span>
+          <strong className="text-[#071524]">{p.mode}</strong>
+        </div>
+        <div className="p-2 rounded bg-[#F3FAFF]">
+          <span className="text-[#44474C] block">Hemicampo</span>
+          <strong className="text-[#006A62]">{p.affectedHemifield}</strong>
+        </div>
+        <div className="p-2 rounded bg-[#F3FAFF]">
+          <span className="text-[#44474C] block">Excentricidad</span>
+          <strong className="text-[#071524]">{p.eccentricityDegrees}°</strong>
+        </div>
+        <div className="p-2 rounded bg-[#F3FAFF]">
+          <span className="text-[#44474C] block">Fijación / Repeticiones</span>
+          <strong className="text-[#071524]">
+            {p.minimumFixationMs} ms · {p.repetitions} reps
+          </strong>
+        </div>
+        <div className="p-2 rounded bg-[#F3FAFF]">
+          <span className="text-[#44474C] block">Estímulo Máx / ISI</span>
+          <strong className="text-[#071524]">
+            {p.maximumStimulusDurationMs} / {p.interStimulusIntervalMs} ms
+          </strong>
+        </div>
+        <div className="p-2 rounded bg-[#F3FAFF]">
+          <span className="text-[#44474C] block">Diana / Dificultad</span>
+          <strong className="text-[#071524]">
+            {p.targetSizePx} px · Nivel {p.difficultyLevel}
+          </strong>
+        </div>
+      </div>
+    );
+  }
+
+  if (cfg.exerciseCode === 'visual-search') {
+    const p = cfg.parameterSchemaVersion === 2 ? cfg.parameters.parameters : cfg.parameters;
+    return (
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+        <div className="p-2 rounded bg-[#F3FAFF]">
+          <span className="text-[#44474C] block">Modo</span>
+          <strong className="text-[#071524]">{p.mode}</strong>
+        </div>
+        <div className="p-2 rounded bg-[#F3FAFF]">
+          <span className="text-[#44474C] block">Hemicampo / Sesgo</span>
+          <strong className="text-[#006A62]">
+            {p.affectedHemifield} ({Math.round(p.affectedHemifieldBias * 100)}%)
+          </strong>
+        </div>
+        <div className="p-2 rounded bg-[#F3FAFF]">
+          <span className="text-[#44474C] block">Dianas / Distractores</span>
+          <strong className="text-[#071524]">
+            {p.targetCount} / {p.distractorCount}
+          </strong>
+        </div>
+        <div className="p-2 rounded bg-[#F3FAFF]">
+          <span className="text-[#44474C] block">Fijación / Búsqueda Máx</span>
+          <strong className="text-[#071524]">
+            {p.minimumFixationMs} ms · {p.maximumSearchTimeMs} ms
+          </strong>
+        </div>
+        <div className="p-2 rounded bg-[#F3FAFF]">
+          <span className="text-[#44474C] block">Diana / Dificultad</span>
+          <strong className="text-[#071524]">
+            {p.targetSizePx} px · Nivel {p.difficultyLevel}
+          </strong>
+        </div>
+      </div>
+    );
+  }
+
+  const p = cfg.parameterSchemaVersion === 2 ? cfg.parameters.parameters : cfg.parameters;
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+      <div className="p-2 rounded bg-[#F3FAFF]">
+        <span className="text-[#44474C] block">Modo</span>
+        <strong className="text-[#071524]">{p.mode}</strong>
+      </div>
+      <div className="p-2 rounded bg-[#F3FAFF]">
+        <span className="text-[#44474C] block">Posición Diana</span>
+        <strong className="text-[#006A62]">{p.targetPosition}</strong>
+      </div>
+      <div className="p-2 rounded bg-[#F3FAFF]">
+        <span className="text-[#44474C] block">Ventana Fijación</span>
+        <strong className="text-[#071524]">
+          {p.minimumFixationMs}–{p.maximumFixationMs} ms
+        </strong>
+      </div>
+      <div className="p-2 rounded bg-[#F3FAFF]">
+        <span className="text-[#44474C] block">Repeticiones / Descanso</span>
+        <strong className="text-[#071524]">
+          {p.repetitions} reps · {p.restBetweenRepetitionsMs} ms
+        </strong>
+      </div>
+      <div className="p-2 rounded bg-[#F3FAFF]">
+        <span className="text-[#44474C] block">Diana / Dificultad</span>
+        <strong className="text-[#071524]">
+          {p.targetSizePx} px · Nivel {p.difficultyLevel}
+        </strong>
+      </div>
+    </div>
+  );
+}
+
+export const TherapeuticPlanTab: React.FC<TherapeuticPlanTabProps> = ({
   patient,
-  onPlanUpdated 
+  onPlanUpdated,
+  plans,
+  activePlanDetail,
+  plansLoading = false,
+  plansError = null,
+  onSelectPlan,
 }) => {
-  const [targetSpeed, setTargetSpeed] = useState(1.2);
-  const [visualFieldAmplitude, setVisualFieldAmplitude] = useState(0.85);
-  const [minFixationTime, setMinFixationTime] = useState(650);
+  const navigate = useNavigate();
+  const { authMode, accessToken, updatePatient } = useAppStore();
+  const isCognitoMode = authMode === 'COGNITO' && Boolean(accessToken);
+
+  // Soporte autónomo si el componente se monta sin que el padre pase plans
+  const [selfPlans, setSelfPlans] = useState<TherapyPlanSummary[]>([]);
+  const [selfPlanDetail, setSelfPlanDetail] = useState<TherapyPlanDetailResponse | null>(null);
+  const [selfLoading, setSelfLoading] = useState(false);
+  const [selfError, setSelfError] = useState<string | null>(null);
+
+  const loadSelfPlans = useCallback(async () => {
+    if (!isCognitoMode || !patient.id) return;
+    setSelfLoading(true);
+    setSelfError(null);
+    try {
+      const res = await clinicalApi.listTherapyPlans(patient.id, { page: 0, size: 20 });
+      setSelfPlans(res.plans);
+      if (res.plans.length > 0) {
+        const preferred = res.plans.find((p) => p.status === 'ACTIVE') ?? res.plans[0];
+        const detail = await clinicalApi.getTherapyPlanDetail(patient.id, preferred.therapyPlanId);
+        setSelfPlanDetail(detail);
+      } else {
+        setSelfPlanDetail(null);
+      }
+    } catch (err) {
+      setSelfError(extractApiErrorMessage(err));
+    } finally {
+      setSelfLoading(false);
+    }
+  }, [isCognitoMode, patient.id]);
+
+  useEffect(() => {
+    if (isCognitoMode && plans === undefined) {
+      void loadSelfPlans();
+    }
+  }, [isCognitoMode, plans, loadSelfPlans]);
+
+  const effectivePlans = plans !== undefined ? plans : selfPlans;
+  const effectiveDetail = activePlanDetail !== undefined ? activePlanDetail : selfPlanDetail;
+  const isLoading = plans !== undefined ? plansLoading : selfLoading;
+  const loadError = plans !== undefined ? plansError : selfError;
+
+  const handleChoosePlan = async (therapyPlanId: string) => {
+    if (onSelectPlan) {
+      onSelectPlan(therapyPlanId);
+      return;
+    }
+    try {
+      setSelfLoading(true);
+      const detail = await clinicalApi.getTherapyPlanDetail(patient.id, therapyPlanId);
+      setSelfPlanDetail(detail);
+    } catch (err) {
+      setSelfError(extractApiErrorMessage(err));
+    } finally {
+      setSelfLoading(false);
+    }
+  };
+
+  // Estado para modo MOCK
+  const [targetSpeed, setTargetSpeed] = useState(
+    patient.activePlan?.exercises?.[0]?.targetSpeed ?? 1.2
+  );
+  const [visualFieldAmplitude, setVisualFieldAmplitude] = useState(
+    patient.activePlan?.exercises?.[0]?.visualFieldAmplitude ?? 0.85
+  );
+  const [minFixationTime, setMinFixationTime] = useState(
+    patient.activePlan?.exercises?.[0]?.minFixationTimeMs ?? 650
+  );
   const [isSaved, setIsSaved] = useState(false);
 
+  if (isCognitoMode) {
+    return (
+      <div className="space-y-6">
+        {loadError && (
+          <div className="bg-[#FFDAD6] border border-[#BA1A1A]/30 text-[#93000A] rounded-xl p-4 flex items-start gap-2.5 text-xs">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{loadError}</span>
+          </div>
+        )}
+
+        {isLoading && !effectiveDetail ? (
+          <div className="bg-white p-10 rounded-xl border border-[#071524]/10 shadow-xs flex items-center justify-center gap-2 text-xs font-semibold text-[#006A62]">
+            <Loader2 className="w-5 h-5 animate-spin" />
+            <span>Cargando planes terapéuticos desde Clinical Service...</span>
+          </div>
+        ) : effectivePlans.length === 0 && !effectiveDetail ? (
+          <div className="bg-white p-8 rounded-xl border border-[#071524]/10 shadow-xs text-center space-y-3">
+            <div className="w-12 h-12 rounded-2xl bg-[#E6F6FF] text-[#006A62] flex items-center justify-center mx-auto">
+              <Layers className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-bold text-[#071524]">
+              Paciente sin Plan Terapéutico asignado
+            </h3>
+            <p className="text-xs text-[#44474C] max-w-md mx-auto">
+              Cree el plan inicial definiendo los límites diarios de sesión, prescripciones por módulo y parámetros clínicos Schema v2.
+            </p>
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => navigate(`/specialist/patients/${patient.id}/prescripcion`)}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#006A62] hover:bg-[#005049] text-white font-bold text-xs shadow-xs cursor-pointer"
+              >
+                <PlusCircle className="w-4 h-4" />
+                Crear Plan Terapéutico
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Selector de Planes del Paciente */}
+            {effectivePlans.length > 0 && (
+              <div className="bg-white p-4 rounded-xl border border-[#071524]/10 shadow-xs flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-bold text-[#44474C] uppercase tracking-wider mr-1">
+                    Planes ({effectivePlans.length}):
+                  </span>
+                  {effectivePlans.map((summary) => {
+                    const badge = getPlanStatusBadge(summary.status);
+                    const isSelected = effectiveDetail?.therapyPlanId === summary.therapyPlanId;
+                    return (
+                      <button
+                        key={summary.therapyPlanId}
+                        type="button"
+                        onClick={() => void handleChoosePlan(summary.therapyPlanId)}
+                        className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${
+                          isSelected
+                            ? 'border-[#006A62] bg-[#E6F6FF] text-[#071524]'
+                            : 'border-[#C4C6CC]/60 bg-white text-[#44474C] hover:bg-[#F3FAFF]'
+                        }`}
+                      >
+                        <span className="font-mono">{summary.therapyPlanId.slice(0, 8)}</span>
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${badge.className}`}>
+                          {badge.label}
+                        </span>
+                        <span className="text-[10px] font-mono text-[#44474C]">
+                          v{summary.configurationVersion}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/specialist/patients/${patient.id}/prescripcion`)}
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-[#071524] bg-[#F3FAFF] hover:bg-[#DBF1FE] border border-[#C4C6CC]/60 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 text-[#006A62]" />
+                    Prescripción y Revisiones
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/specialist/patients/${patient.id}/parametros`)}
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-[#006A62] bg-[#DBF1FE] hover:bg-[#84F5E8]/40 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    Ajuste Fino Schema v2
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Detalle del Plan Activo / Seleccionado */}
+            {effectiveDetail && (
+              <div className="bg-white p-6 rounded-xl border border-[#071524]/10 shadow-xs space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-[#071524]/10">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-[#D5ECF8] text-[#006A62] flex items-center justify-center">
+                      <Shield className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="font-bold text-base text-[#071524]">
+                          Plan Terapéutico ({effectiveDetail.therapyPlanId.slice(0, 8)}…)
+                        </h3>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                            getPlanStatusBadge(effectiveDetail.status).className
+                          }`}
+                        >
+                          {getPlanStatusBadge(effectiveDetail.status).label}
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-[#DBF1FE] text-[#071524] text-[11px] font-mono font-bold">
+                          Versión Config v{effectiveDetail.configurationVersion}
+                        </span>
+                      </div>
+                      <p className="text-xs text-[#44474C] mt-0.5">
+                        Límites de sesión, cuota diaria y configuraciones activas del paciente
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Límites de Sesión y Metas Diarias */}
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
+                  <div className="p-3.5 rounded-xl bg-[#E6F6FF] border border-[#071524]/10">
+                    <span className="text-[#44474C] font-semibold block">Límite Diario</span>
+                    <strong className="text-lg text-[#071524]">
+                      {effectiveDetail.dailySessionLimit} sesiones/día
+                    </strong>
+                  </div>
+                  <div className="p-3.5 rounded-xl bg-[#E6F6FF] border border-[#071524]/10">
+                    <span className="text-[#44474C] font-semibold block">Meta Diaria</span>
+                    <strong className="text-lg text-[#071524]">
+                      {effectiveDetail.dailyTargetDurationMinutes} min
+                    </strong>
+                  </div>
+                  <div className="p-3.5 rounded-xl bg-[#E6F6FF] border border-[#071524]/10">
+                    <span className="text-[#44474C] font-semibold block">Tope Seguridad Diario</span>
+                    <strong className="text-lg text-[#071524]">
+                      {effectiveDetail.dailyHardSafetyLimitMinutes != null
+                        ? `${effectiveDetail.dailyHardSafetyLimitMinutes} min`
+                        : 'No definido'}
+                    </strong>
+                  </div>
+                  <div className="p-3.5 rounded-xl bg-[#E6F6FF] border border-[#071524]/10">
+                    <span className="text-[#44474C] font-semibold block">Duración por Sesión</span>
+                    <strong className="text-lg text-[#071524]">
+                      {effectiveDetail.minimumValidDurationMinutes}–{effectiveDetail.maximumSessionDurationMinutes} min
+                    </strong>
+                  </div>
+                  <div className="p-3.5 rounded-xl bg-[#E6F6FF] border border-[#071524]/10">
+                    <span className="text-[#44474C] font-semibold block">Muestras Mínimas</span>
+                    <strong className="text-lg text-[#071524]">
+                      {effectiveDetail.minimumValidSampleCount}
+                    </strong>
+                  </div>
+                </div>
+
+                {/* Prescripciones Diarias por Ejercicio */}
+                <div className="p-4 rounded-xl bg-[#F3FAFF] border border-[#071524]/10">
+                  <span className="text-xs font-bold text-[#071524] block mb-2">
+                    Prescripciones Diarias por Ejercicio (`dailyExercisePrescriptions`)
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {(Object.entries(effectiveDetail.dailyExercisePrescriptions) as [TherapyExerciseCode, number | undefined][]).map(
+                      ([code, count]) =>
+                        count !== undefined && (
+                          <span
+                            key={code}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-[#006A62]/20 text-xs font-semibold text-[#071524]"
+                          >
+                            <span className="w-2 h-2 rounded-full bg-[#006A62]" />
+                            {EXERCISE_LABELS[code] || code}: <strong>{count} / día</strong>
+                          </span>
+                        )
+                    )}
+                  </div>
+                </div>
+
+                {/* Configuraciones Efectivas */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-bold text-[#071524]">
+                      Configuraciones Terapéuticas ({effectiveDetail.configurations.length})
+                    </h4>
+                  </div>
+
+                  {effectiveDetail.configurations.length === 0 ? (
+                    <div className="p-5 rounded-xl bg-[#F3FAFF] border border-dashed border-[#071524]/20 text-center text-xs text-[#44474C]">
+                      Aún no se han agregado configuraciones de parámetros a este plan. Use{' '}
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/specialist/patients/${patient.id}/parametros`)}
+                        className="text-[#006A62] font-bold underline cursor-pointer"
+                      >
+                        Ajuste Fino
+                      </button>{' '}
+                      o{' '}
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/specialist/patients/${patient.id}/prescripcion`)}
+                        className="text-[#006A62] font-bold underline cursor-pointer"
+                      >
+                        Prescripción
+                      </button>{' '}
+                      para publicar una configuración Schema v2.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {effectiveDetail.configurations.map((cfg) => {
+                        const completionTarget = extractCompletionTarget(cfg);
+                        return (
+                          <div
+                            key={cfg.configurationId}
+                            className="p-4 rounded-xl border border-[#071524]/10 bg-white space-y-3"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[#071524]/10">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-bold text-sm text-[#071524]">
+                                  {EXERCISE_LABELS[cfg.exerciseCode] || cfg.exerciseCode}
+                                </span>
+                                <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-[#DBF1FE] text-[#006A62]">
+                                  v{cfg.version} · Schema v{cfg.parameterSchemaVersion}
+                                </span>
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                                    cfg.status === 'ACTIVE'
+                                      ? 'bg-[#81F3E5]/50 text-[#005049]'
+                                      : 'bg-[#FFDAD6] text-[#93000A]'
+                                  }`}
+                                >
+                                  {cfg.status}
+                                </span>
+                              </div>
+                              <span className="text-[11px] text-[#44474C]">
+                                Vigente desde: {formatDateTime(cfg.effectiveFrom)}
+                              </span>
+                            </div>
+
+                            {renderConfigurationDetails(cfg)}
+
+                            {completionTarget && (
+                              <div className="pt-2 border-t border-[#071524]/5 flex items-center gap-2 text-xs text-[#006A62] font-semibold">
+                                <Target className="w-3.5 h-3.5" />
+                                <span>
+                                  Meta de Finalización (Schema v2):{' '}
+                                  <strong>
+                                    {completionTarget.criterion === 'REPETITIONS'
+                                      ? `${completionTarget.target} repeticiones exitosas`
+                                      : `${completionTarget.target} segundos activos`}
+                                  </strong>
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    );
+  }
+
+  // Modo MOCK: preserva el editor interactivo y tarjetas originales
   const exercises = patient.activePlan?.exercises || [
     {
       id: 'ex-01',
@@ -69,6 +581,25 @@ export const TherapeuticPlanTab: React.FC<TherapeuticPlanTabProps> = ({
         min_fixation_time: minFixationTime,
       },
     });
+
+    if (patient.activePlan) {
+      updatePatient({
+        ...patient,
+        activePlan: {
+          ...patient.activePlan,
+          exercises: patient.activePlan.exercises.map((ex, idx) =>
+            idx === 0
+              ? {
+                  ...ex,
+                  targetSpeed,
+                  visualFieldAmplitude,
+                  minFixationTimeMs: minFixationTime,
+                }
+              : ex
+          ),
+        },
+      });
+    }
 
     setIsSaved(true);
     if (onPlanUpdated) onPlanUpdated();
@@ -128,9 +659,21 @@ export const TherapeuticPlanTab: React.FC<TherapeuticPlanTabProps> = ({
             </p>
           </div>
 
-          <div className="flex items-center gap-2 text-xs font-semibold text-[#006A62] bg-[#DBF1FE] px-3 py-1.5 rounded-lg">
-            <Sparkles className="w-4 h-4" />
-            <span>Prescripción Médica Directa</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => navigate(`/specialist/patients/${patient.id}/prescripcion`)}
+              className="flex items-center gap-1.5 text-xs font-bold text-[#071524] bg-[#F3FAFF] hover:bg-[#DBF1FE] border border-[#C4C6CC]/60 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+            >
+              <ExternalLink className="w-3.5 h-3.5 text-[#006A62]" />
+              <span>Constructor Completo</span>
+            </button>
+            <button
+              onClick={() => navigate(`/specialist/patients/${patient.id}/parametros`)}
+              className="flex items-center gap-1.5 text-xs font-bold text-[#006A62] bg-[#DBF1FE] hover:bg-[#84F5E8]/40 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Simulador y Ajuste Fino</span>
+            </button>
           </div>
         </div>
 

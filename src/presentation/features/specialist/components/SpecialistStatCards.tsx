@@ -17,6 +17,7 @@ interface SpecialistStatCardsProps {
   criticalAlertsCount: number;
   globalAdherenceRate: number;
   onFilterCriticalAlerts: () => void;
+  isCriticalFilterActive?: boolean;
 }
 
 export const SpecialistStatCards: React.FC<SpecialistStatCardsProps> = ({
@@ -26,6 +27,7 @@ export const SpecialistStatCards: React.FC<SpecialistStatCardsProps> = ({
   criticalAlertsCount = 2,
   globalAdherenceRate = 94.2,
   onFilterCriticalAlerts,
+  isCriticalFilterActive = false,
 }) => {
   const completionPercentage = Math.round((completedTodayCount / Math.max(1, scheduledTodayCount)) * 100);
 
@@ -93,7 +95,11 @@ export const SpecialistStatCards: React.FC<SpecialistStatCardsProps> = ({
       </div>
 
       {/* Card 3: Alertas de Adherencia (Warning Card) */}
-      <div className="bg-white p-5 rounded-xl border-2 border-[#BA1A1A]/30 shadow-xs flex flex-col justify-between relative overflow-hidden transition-all hover:shadow-sm">
+      <div className={`p-5 rounded-xl border-2 shadow-xs flex flex-col justify-between relative overflow-hidden transition-all hover:shadow-sm ${
+        isCriticalFilterActive 
+          ? 'bg-[#FFDAD6]/30 border-[#BA1A1A] ring-2 ring-[#BA1A1A]/30' 
+          : 'bg-white border-[#BA1A1A]/30'
+      }`}>
         <div className="absolute top-0 right-0 w-16 h-16 bg-[#FFDAD6]/40 rounded-bl-full pointer-events-none" />
         
         <div className="flex items-center justify-between">
@@ -101,8 +107,10 @@ export const SpecialistStatCards: React.FC<SpecialistStatCardsProps> = ({
             <AlertTriangle className="w-4 h-4 text-[#BA1A1A]" />
             Alertas de Adherencia
           </span>
-          <span className="px-2 py-0.5 rounded text-xs font-bold bg-[#BA1A1A] text-white">
-            Atención
+          <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+            isCriticalFilterActive ? 'bg-[#93000A] text-white' : 'bg-[#BA1A1A] text-white'
+          }`}>
+            {isCriticalFilterActive ? 'Filtrando' : 'Atención'}
           </span>
         </div>
 
@@ -111,19 +119,22 @@ export const SpecialistStatCards: React.FC<SpecialistStatCardsProps> = ({
             {criticalAlertsCount}
           </span>
           <span className="text-xs font-medium text-[#44474C]">
-            Pacientes con &lt;60% o fatiga severa
+            {criticalAlertsCount === 1 ? '1 paciente con alerta o eval. pendiente' : `${criticalAlertsCount} pacientes con alerta o eval. pendiente`}
           </span>
         </div>
 
         <div className="mt-4 pt-3 border-t border-[#BA1A1A]/20 flex items-center justify-between">
           <button 
+            type="button"
             onClick={onFilterCriticalAlerts}
             className="text-xs font-bold text-[#BA1A1A] hover:underline flex items-center gap-1 cursor-pointer transition-colors"
           >
-            Revisar Alertas Críticas
+            {isCriticalFilterActive ? 'Quitar Filtro de Alertas' : 'Revisar Alertas Críticas'}
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
-          <span className="text-[11px] font-semibold text-[#74777C]">Acción requerida</span>
+          <span className="text-[11px] font-semibold text-[#74777C]">
+            {isCriticalFilterActive ? 'Filtro activo' : 'Acción requerida'}
+          </span>
         </div>
       </div>
 
@@ -143,7 +154,7 @@ export const SpecialistStatCards: React.FC<SpecialistStatCardsProps> = ({
             {globalAdherenceRate}%
           </span>
           <span className="text-xs font-bold text-[#006A62] bg-[#DBF1FE] px-2 py-0.5 rounded-md">
-            Óptimo
+            {globalAdherenceRate >= 80 ? 'Óptimo' : globalAdherenceRate >= 60 ? 'Regular' : 'En Observación'}
           </span>
         </div>
 

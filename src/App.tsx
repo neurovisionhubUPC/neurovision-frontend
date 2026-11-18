@@ -4,6 +4,10 @@ import { LoginPage } from './presentation/features/auth/pages/LoginPage';
 import { PatientDashboard } from './presentation/features/dashboard/pages/PatientDashboard';
 import { SpecialistDashboard } from './presentation/features/specialist/pages/SpecialistDashboard';
 import { PatientRecordPage } from './presentation/features/specialist/pages/PatientRecordPage';
+import { SessionTelemetryAuditPage } from './presentation/features/specialist/pages/SessionTelemetryAuditPage';
+import { ClinicalReportPreviewPage } from './presentation/features/specialist/pages/ClinicalReportPreviewPage';
+import { TherapeuticPrescriptionPage } from './presentation/features/specialist/pages/TherapeuticPrescriptionPage';
+import { FineParameterConfigPage } from './presentation/features/specialist/pages/FineParameterConfigPage';
 import { useAppStore } from './core/store/useAppStore';
 
 function App() {
@@ -55,6 +59,38 @@ function App() {
           element={
             isAuthenticated && userRole === 'SPECIALIST' ? 
             <PatientRecordPage /> : 
+            <Navigate to="/login" />
+          } 
+        />
+        <Route 
+          path="/specialist/patients/:patientId/auditoria" 
+          element={
+            isAuthenticated && userRole === 'SPECIALIST' ? 
+            <SessionTelemetryAuditPage /> : 
+            <Navigate to="/login" />
+          } 
+        />
+        <Route 
+          path="/specialist/patients/:patientId/reporte-pdf" 
+          element={
+            isAuthenticated && userRole === 'SPECIALIST' ? 
+            <ClinicalReportPreviewPage /> : 
+            <Navigate to="/login" />
+          } 
+        />
+        <Route 
+          path="/specialist/patients/:patientId/prescripcion" 
+          element={
+            isAuthenticated && userRole === 'SPECIALIST' ? 
+            <TherapeuticPrescriptionPage /> : 
+            <Navigate to="/login" />
+          } 
+        />
+        <Route 
+          path="/specialist/patients/:patientId/parametros" 
+          element={
+            isAuthenticated && userRole === 'SPECIALIST' ? 
+            <FineParameterConfigPage /> : 
             <Navigate to="/login" />
           } 
         />

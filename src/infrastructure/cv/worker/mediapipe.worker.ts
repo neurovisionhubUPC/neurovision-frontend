@@ -92,7 +92,111 @@ self.onmessage = async (event: MessageEvent) => {
 
         const leftEAR = calcEAR(leftEyeContour);
         const rightEAR = calcEAR(rightEyeContour);
-        const isBlinking = leftEAR < 0.20 || rightEAR < 0.20;
+
+        // Extract ARKit Oculomotor Blendshapes (already computed by MediaPipe FaceLandmarker)
+        const blendMap: Record<string, number> = {};
+        if (results.faceBlendshapes && results.faceBlendshapes.length > 0) {
+          const cats = results.faceBlendshapes[0].categories;
+          for (let i = 0; i < cats.length; i++) {
+            blendMap[cats[i].categoryName] = cats[i].score;
+          }
+        }
+
+        const eyeBlinkLeft = blendMap['eyeBlinkLeft'] ?? 0;
+        const eyeBlinkRight = blendMap['eyeBlinkRight'] ?? 0;
+        const isBlinking =
+          leftEAR < 0.19 ||
+          rightEAR < 0.19 ||
+          eyeBlinkLeft > 0.55 ||
+          eyeBlinkRight > 0.55;
+
+        // 5-Point Iris Centroids (reduces single-landmark quantum jitter by sqrt(5))
+        const computeIrisCentroid = (indices: number[], fallbackIdx: number) => {
+          let sx = 0, sy = 0, sz = 0, count = 0;
+          for (const idx of indices) {
+            const pt = landmarks[idx];
+            if (pt) {
+              sx += pt.x;
+              sy += pt.y;
+              sz += pt.z ?? 0;
+              count++;
+            }
+          }
+          if (count === 0) {
+            const fb = landmarks[fallbackIdx] || { x: 0.5, y: 0.5, z: 0 };
+            return { x: fb.x, y: fb.y, z: fb.z ?? 0 };
+          }
+          return { x: sx / count, y: sy / count, z: sz / count };
+        };
+
+        const pupilL = computeIrisCentroid([468, 469, 470, 471, 472], 468);
+        const pupilR = computeIrisCentroid([473, 474, 475, 476, 477], 473);
+
+        // Roll-invariant & Scale-invariant Intrinsic Eye Coordinates (u, v)
+        // Projects iris displacement onto the anatomical canthal axis (outer <-> inner corner)
+        // and normalizes by palpebral fissure width so head translation, Z-depth, and head roll cancel out.
+        const computeIntrinsicEyeCoords = (
+          pupil: { x: number; y: number },
+          leftMostCorner: { x: number; y: number },
+          rightMostCorner: { x: number; y: number },
+          upperLid?: { x: number; y: number },
+          lowerLid?: { x: number; y: number }
+        ) => {
+          const dxCorner = rightMostCorner.x - leftMostCorner.x;
+          const dyCorner = rightMostCorner.y - leftMostCorner.y;
+          const eyeWidth = Math.max(0.0001, Math.hypot(dxCorner, dyCorner));
+
+          // Unit vectors along the palpebral axis (ex) and perpendicular to it (ey)
+          const exX = dxCorner / eyeWidth;
+          const exY = dyCorner / eyeWidth;
+          const eyX = -exY;
+          const eyY = exX;
+
+          const midX = (leftMostCorner.x + rightMostCorner.x) / 2;
+          let midY = (leftMostCorner.y + rightMostCorner.y) / 2;
+          if (upperLid && lowerLid) {
+            const lidMidY = (upperLid.y + lowerLid.y) / 2;
+            midY = midY * 0.65 + lidMidY * 0.35;
+          }
+
+          const relX = pupil.x - midX;
+          const relY = pupil.y - midY;
+
+          const u = (relX * exX + relY * exY) / eyeWidth;
+          const v = (relX * eyX + relY * eyY) / eyeWidth;
+          return { u, v, eyeWidth };
+        };
+
+        const leftIntrinsic = computeIntrinsicEyeCoords(
+          pupilL,
+          landmarks[33],
+          landmarks[133],
+          landmarks[159],
+          landmarks[145]
+        );
+        const rightIntrinsic = computeIntrinsicEyeCoords(
+          pupilR,
+          landmarks[362],
+          landmarks[263],
+          landmarks[386],
+          landmarks[374]
+        );
+
+        // Blendshape gaze signals: horizontal & vertical appearance cues
+        // Note: in camera image space, looking to the user's right (screen right) corresponds to
+        // left eye looking IN (nasal) and right eye looking OUT (temporal).
+        const lookInL = blendMap['eyeLookInLeft'] ?? 0;
+        const lookOutL = blendMap['eyeLookOutLeft'] ?? 0;
+        const lookUpL = blendMap['eyeLookUpLeft'] ?? 0;
+        const lookDownL = blendMap['eyeLookDownLeft'] ?? 0;
+
+        const lookInR = blendMap['eyeLookInRight'] ?? 0;
+        const lookOutR = blendMap['eyeLookOutRight'] ?? 0;
+        const lookUpR = blendMap['eyeLookUpRight'] ?? 0;
+        const lookDownR = blendMap['eyeLookDownRight'] ?? 0;
+
+        const blendX = ((lookInL - lookOutL) + (lookOutR - lookInR)) / 2;
+        const blendY = ((lookDownL - lookUpL) + (lookDownR - lookUpR)) / 2;
 
         // Anclaje Cefálico Rígido (Glabela - Landmark 168 - Chhimpa et al., 2024)
         const glabella = landmarks[168] ? { x: landmarks[168].x, y: landmarks[168].y, z: landmarks[168].z } : { x: 0.5, y: 0.5, z: 0 };
@@ -103,13 +207,23 @@ self.onmessage = async (event: MessageEvent) => {
         const irisDiameterAvg = (irisDiameterL + irisDiameterR) / 2;
 
         rawMetrics = {
-          pupilL: landmarks[468],
-          pupilR: landmarks[473],
+          pupilL,
+          pupilR,
           corners: {
             LO: landmarks[33],
             LI: landmarks[133],
             RI: landmarks[362],
             RO: landmarks[263]
+          },
+          eyeFeatures: {
+            uL: leftIntrinsic.u,
+            vL: leftIntrinsic.v,
+            uR: rightIntrinsic.u,
+            vR: rightIntrinsic.v,
+            uAvg: (leftIntrinsic.u + rightIntrinsic.u) / 2,
+            vAvg: (leftIntrinsic.v + rightIntrinsic.v) / 2,
+            blendX,
+            blendY
           },
           glabella,
           irisDiameter: irisDiameterAvg,

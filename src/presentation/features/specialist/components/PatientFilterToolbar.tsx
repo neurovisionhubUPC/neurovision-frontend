@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, FilterX } from 'lucide-react';
+import { Search, FilterX, AlertTriangle, X } from 'lucide-react';
 
 interface PatientFilterToolbarProps {
   searchQuery: string;
@@ -11,6 +11,8 @@ interface PatientFilterToolbarProps {
   selectedFacility: string;
   onFacilityChange: (f: string) => void;
   onResetFilters: () => void;
+  criticalOnly?: boolean;
+  onToggleCriticalOnly?: () => void;
 }
 
 export const PatientFilterToolbar: React.FC<PatientFilterToolbarProps> = ({
@@ -23,6 +25,8 @@ export const PatientFilterToolbar: React.FC<PatientFilterToolbarProps> = ({
   selectedFacility,
   onFacilityChange,
   onResetFilters,
+  criticalOnly = false,
+  onToggleCriticalOnly,
 }) => {
   return (
     <section className="bg-white p-3 sm:p-4 rounded-xl border border-[#071524]/10 shadow-xs flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3">
@@ -40,6 +44,23 @@ export const PatientFilterToolbar: React.FC<PatientFilterToolbarProps> = ({
 
       {/* Select Filters Cluster */}
       <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+        {/* Critical Alerts Filter Badge */}
+        {criticalOnly && (
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#FFDAD6] text-[#93000A] text-xs font-bold border border-[#BA1A1A]/30 animate-in fade-in">
+            <AlertTriangle className="w-3.5 h-3.5 text-[#BA1A1A] shrink-0" />
+            <span>Filtro Alertas Clínicas</span>
+            <button
+              type="button"
+              onClick={onToggleCriticalOnly || onResetFilters}
+              className="ml-1 p-0.5 hover:bg-[#BA1A1A]/20 rounded text-[#BA1A1A] cursor-pointer"
+              title="Quitar filtro de alertas críticas"
+              aria-label="Quitar filtro de alertas críticas"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
         {/* Diagnostic Filter */}
         <div className="flex items-center text-xs text-[#44474C] font-medium flex-1 sm:flex-initial">
           <label className="sr-only" htmlFor="filter-diagnostic">
@@ -98,9 +119,11 @@ export const PatientFilterToolbar: React.FC<PatientFilterToolbarProps> = ({
 
         {/* Filter Reset Button */}
         <button
+          type="button"
           onClick={onResetFilters}
           className="p-2 rounded-lg border border-[#C4C6CC]/60 hover:bg-[#F3FAFF] text-[#44474C] hover:text-[#071524] transition-colors cursor-pointer shrink-0"
           title="Limpiar Filtros"
+          aria-label="Limpiar Filtros"
         >
           <FilterX className="w-4 h-4" />
         </button>
