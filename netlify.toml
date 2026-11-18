@@ -1,0 +1,12 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  # Todas las variables VITE_* se inyectan intencionalmente en el bundle del navegador por Vite
+  SECRETS_SCAN_OMIT_KEYS = "VITE_AWS_REGION,VITE_COGNITO_USER_POOL_ID,VITE_COGNITO_CLIENT_ID,VITE_COGNITO_ISSUER_URL,VITE_COGNITO_DOMAIN,VITE_COGNITO_REDIRECT_URI,VITE_COGNITO_LOGOUT_URI,VITE_IAM_API_URL,VITE_PROFILE_API_URL,VITE_CLINICAL_API_URL,VITE_TELEMETRY_API_URL,VITE_ANALYTICS_API_URL"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

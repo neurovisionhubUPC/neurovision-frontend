@@ -47,17 +47,13 @@ export type CognitoAuthSignInResult =
 const PKCE_VERIFIER_KEY = 'neurovision_pkce_verifier';
 const OAUTH_STATE_KEY = 'neurovision_oauth_state';
 
-const DEFAULT_AWS_REGION = 'us-east-1';
-const DEFAULT_COGNITO_USER_POOL_ID = 'us-east-1_6eG3zLkZ2';
-const DEFAULT_COGNITO_CLIENT_ID = '52rlcllcsdk0rdvbqebe8efbpm';
-
 export function getCognitoConfig(): CognitoConfig {
-  const region = (import.meta.env.VITE_AWS_REGION || DEFAULT_AWS_REGION).trim();
-  const userPoolId = (import.meta.env.VITE_COGNITO_USER_POOL_ID || DEFAULT_COGNITO_USER_POOL_ID).trim();
-  const clientId = (import.meta.env.VITE_COGNITO_CLIENT_ID || DEFAULT_COGNITO_CLIENT_ID).trim();
+  const region = (import.meta.env.VITE_AWS_REGION || '').trim();
+  const userPoolId = (import.meta.env.VITE_COGNITO_USER_POOL_ID || '').trim();
+  const clientId = (import.meta.env.VITE_COGNITO_CLIENT_ID || '').trim();
   const issuerUrl = (
     import.meta.env.VITE_COGNITO_ISSUER_URL ||
-    `https://cognito-idp.${region}.amazonaws.com/${userPoolId}`
+    (region && userPoolId ? `https://cognito-idp.${region}.amazonaws.com/${userPoolId}` : '')
   ).replace(/\/+$/, '');
   const domain = (import.meta.env.VITE_COGNITO_DOMAIN || '').replace(/\/+$/, '');
   const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173';
