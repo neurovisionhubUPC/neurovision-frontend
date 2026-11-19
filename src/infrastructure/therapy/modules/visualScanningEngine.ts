@@ -1,5 +1,6 @@
 import type { VisualScanningParameters } from '../../api/contracts/clinical.contracts';
 import type {
+  AnalyticsDataOrigin,
   CompensatorySaccadeTrialBody,
   StandardScanningTrialBody,
   SystematicExplorationTrialBody,
@@ -9,7 +10,7 @@ import {
   computeAcceptanceRadiusPx,
   DEFAULT_PX_PER_CM,
   DEFAULT_VIEWING_DISTANCE_CM,
-} from '../retinotopicGeometry';
+} from '../retinotopicGeometry.ts';
 
 export type ExplorationQuadrant = 'TOP_LEFT' | 'TOP_RIGHT' | 'BOTTOM_LEFT' | 'BOTTOM_RIGHT';
 
@@ -88,6 +89,16 @@ function createUuid(): string {
 function clamp(val: number, min: number, max: number): number {
   if (!Number.isFinite(val)) return min;
   return Math.max(min, Math.min(max, val));
+}
+
+function resolveStepDeltas(
+  deltaMs: number,
+  dwellDeltaMs?: number
+): { safeDeltaMs: number; effectiveDwellDelta: number } {
+  const safeDeltaMs = Number.isFinite(deltaMs) ? Math.max(0, deltaMs) : 0;
+  const rawDwell = dwellDeltaMs ?? safeDeltaMs;
+  const effectiveDwellDelta = Number.isFinite(rawDwell) ? Math.max(0, rawDwell) : 0;
+  return { safeDeltaMs, effectiveDwellDelta };
 }
 
 // Stratified meridians (degrees relative to horizontal hemifield axis)
@@ -169,56 +180,62 @@ export function stepStandardScanningTrial(
   cursor: { x: number; y: number },
   deltaMs: number,
   params: VisualScanningParameters,
-  isGazeValid: boolean = true
+  isGazeValid: boolean = true,
+  dwellDeltaMs?: number,
+  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED'
 ): StandardScanningTrialBody | null {
   if (state.completed) return null;
 
-  state.elapsedMs += deltaMs;
+  const { safeDeltaMs, effectiveDwellDelta } = resolveStepDeltas(deltaMs, dwellDeltaMs);
+  const minFixMs = Math.round(params.minimumFixationMs);
+  const maxStimulusMs = Math.round(params.maximumStimulusDurationMs);
+
+  state.elapsedMs += safeDeltaMs;
   const target = state.target;
   const dist = Math.hypot(target.x - cursor.x, target.y - cursor.y);
   const hovering = dist <= target.acceptanceRadius;
 
   if (hovering && isGazeValid) {
-    target.dwellTimeMs += deltaMs;
-    if (target.dwellTimeMs >= params.minimumFixationMs) {
+    target.dwellTimeMs += effectiveDwellDelta;
+    if (target.dwellTimeMs >= minFixMs) {
       target.found = true;
       state.completed = true;
       state.outcome = 'SUCCESS';
 
       const confirmedDwellMs = Math.min(
-        params.maximumStimulusDurationMs,
-        Math.max(params.minimumFixationMs, Math.round(target.dwellTimeMs))
+        maxStimulusMs,
+        Math.max(minFixMs, Math.round(target.dwellTimeMs))
       );
       const localizationDurationMs = Math.min(
-        params.maximumStimulusDurationMs,
+        maxStimulusMs,
         Math.max(confirmedDwellMs, Math.round(state.elapsedMs))
       );
 
       return {
         schemaVersion: 1,
         trialId: state.trialId,
-        dataOrigin: 'PRODUCER_REPORTED',
+        dataOrigin,
         outcome: 'SUCCESS',
         confirmedDwellMs,
         localizationDurationMs,
       };
     }
   } else {
-    target.dwellTimeMs = Math.max(0, target.dwellTimeMs - deltaMs * 1.25);
+    target.dwellTimeMs = Math.max(0, target.dwellTimeMs - safeDeltaMs * 1.25);
   }
 
-  if (state.elapsedMs >= params.maximumStimulusDurationMs) {
+  if (state.elapsedMs >= maxStimulusMs) {
     state.completed = true;
     state.outcome = 'TIMEOUT';
     const localizationDurationMs = Math.max(
-      params.maximumStimulusDurationMs,
+      maxStimulusMs,
       Math.round(state.elapsedMs)
     );
 
     return {
       schemaVersion: 1,
       trialId: state.trialId,
-      dataOrigin: 'PRODUCER_REPORTED',
+      dataOrigin,
       outcome: 'TIMEOUT',
       confirmedDwellMs: null,
       localizationDurationMs,
@@ -230,18 +247,20 @@ export function stepStandardScanningTrial(
 
 export function interruptStandardScanningTrial(
   state: StandardScanningTrialState,
-  params: VisualScanningParameters
+  params: VisualScanningParameters,
+  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED'
 ): StandardScanningTrialBody {
   state.completed = true;
   state.outcome = 'INTERRUPTED';
+  const maxStimulusMs = Math.round(params.maximumStimulusDurationMs);
   const localizationDurationMs = Math.min(
-    Math.max(0, params.maximumStimulusDurationMs - 1),
+    Math.max(0, maxStimulusMs - 1),
     Math.max(0, Math.round(state.elapsedMs))
   );
   return {
     schemaVersion: 1,
     trialId: state.trialId,
-    dataOrigin: 'PRODUCER_REPORTED',
+    dataOrigin,
     outcome: 'INTERRUPTED',
     confirmedDwellMs: null,
     localizationDurationMs,
@@ -327,12 +346,18 @@ export function stepSystematicExplorationTrial(
   cursor: { x: number; y: number },
   deltaMs: number,
   params: VisualScanningParameters,
-  isGazeValid: boolean = true
+  isGazeValid: boolean = true,
+  dwellDeltaMs?: number,
+  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED'
 ): SystematicExplorationTrialBody | null {
   if (state.completed) return null;
 
-  state.elapsedMs += deltaMs;
-  state.currentQuadrantElapsedMs += deltaMs;
+  const { safeDeltaMs, effectiveDwellDelta } = resolveStepDeltas(deltaMs, dwellDeltaMs);
+  const minFixMs = Math.round(params.minimumFixationMs);
+  const maxStimulusMs = Math.round(params.maximumStimulusDurationMs);
+
+  state.elapsedMs += safeDeltaMs;
+  state.currentQuadrantElapsedMs += safeDeltaMs;
   const activeWp = state.waypoints[state.currentStepIndex];
 
   if (activeWp && !activeWp.found) {
@@ -340,15 +365,15 @@ export function stepSystematicExplorationTrial(
     const hovering = dist <= activeWp.acceptanceRadius;
 
     if (hovering && isGazeValid) {
-      activeWp.dwellTimeMs += deltaMs;
-      if (activeWp.dwellTimeMs >= params.minimumFixationMs) {
+      activeWp.dwellTimeMs += effectiveDwellDelta;
+      if (activeWp.dwellTimeMs >= minFixMs) {
         activeWp.found = true;
         const confirmedDwellMs = Math.min(
-          params.maximumStimulusDurationMs,
-          Math.max(params.minimumFixationMs, Math.round(activeWp.dwellTimeMs))
+          maxStimulusMs,
+          Math.max(minFixMs, Math.round(activeWp.dwellTimeMs))
         );
         const timeToVisitMs = Math.min(
-          params.maximumStimulusDurationMs,
+          maxStimulusMs,
           Math.max(confirmedDwellMs, Math.round(state.currentQuadrantElapsedMs))
         );
 
@@ -364,38 +389,48 @@ export function stepSystematicExplorationTrial(
         if (state.currentStepIndex >= CANONICAL_EXPLORATION_QUADRANTS.length) {
           state.completed = true;
           state.outcome = 'COMPLETED';
-          const confirmedDuration = state.visits.reduce((sum, v) => sum + v.timeToVisitMs, 0);
+          const safeVisits = state.visits.slice(0, 4).map((v) => ({
+            quadrant: v.quadrant,
+            timeToVisitMs: Math.round(v.timeToVisitMs),
+            confirmedDwellMs: Math.round(v.confirmedDwellMs),
+          }));
+          const confirmedDuration = safeVisits.reduce((sum, v) => sum + v.timeToVisitMs, 0);
           state.elapsedMs = confirmedDuration;
 
           return {
             schemaVersion: 1,
             trialId: state.trialId,
-            dataOrigin: 'PRODUCER_REPORTED',
+            dataOrigin,
             outcome: 'COMPLETED',
             elapsedMs: confirmedDuration,
-            visits: [...state.visits],
+            visits: safeVisits,
           };
         }
       }
     } else {
-      activeWp.dwellTimeMs = Math.max(0, activeWp.dwellTimeMs - deltaMs * 1.25);
+      activeWp.dwellTimeMs = Math.max(0, activeWp.dwellTimeMs - safeDeltaMs * 1.25);
     }
   }
 
-  if (state.currentQuadrantElapsedMs >= params.maximumStimulusDurationMs) {
+  if (state.currentQuadrantElapsedMs >= maxStimulusMs) {
     state.completed = true;
     state.outcome = 'TIMED_OUT';
-    const confirmedDuration = state.visits.reduce((sum, v) => sum + v.timeToVisitMs, 0);
-    const elapsedMs = confirmedDuration + params.maximumStimulusDurationMs;
+    const safeVisits = state.visits.slice(0, 3).map((v) => ({
+      quadrant: v.quadrant,
+      timeToVisitMs: Math.round(v.timeToVisitMs),
+      confirmedDwellMs: Math.round(v.confirmedDwellMs),
+    }));
+    const confirmedDuration = safeVisits.reduce((sum, v) => sum + v.timeToVisitMs, 0);
+    const elapsedMs = confirmedDuration + maxStimulusMs;
     state.elapsedMs = elapsedMs;
 
     return {
       schemaVersion: 1,
       trialId: state.trialId,
-      dataOrigin: 'PRODUCER_REPORTED',
+      dataOrigin,
       outcome: 'TIMED_OUT',
       elapsedMs,
-      visits: [...state.visits],
+      visits: safeVisits,
     };
   }
 
@@ -404,23 +439,29 @@ export function stepSystematicExplorationTrial(
 
 export function interruptSystematicExplorationTrial(
   state: SystematicExplorationTrialState,
-  params: VisualScanningParameters
+  params: VisualScanningParameters,
+  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED'
 ): SystematicExplorationTrialBody {
   state.completed = true;
   state.outcome = 'INTERRUPTED';
-  const safeVisits = state.visits.slice(0, 3);
+  const maxStimulusMs = Math.round(params.maximumStimulusDurationMs);
+  const safeVisits = state.visits.slice(0, 3).map((v) => ({
+    quadrant: v.quadrant,
+    timeToVisitMs: Math.round(v.timeToVisitMs),
+    confirmedDwellMs: Math.round(v.confirmedDwellMs),
+  }));
   const confirmedDuration = safeVisits.reduce((sum, v) => sum + v.timeToVisitMs, 0);
   const remaining = clamp(
     Math.round(state.currentQuadrantElapsedMs),
     0,
-    Math.max(0, params.maximumStimulusDurationMs - 1)
+    Math.max(0, maxStimulusMs - 1)
   );
   const elapsedMs = confirmedDuration + remaining;
 
   return {
     schemaVersion: 1,
     trialId: state.trialId,
-    dataOrigin: 'PRODUCER_REPORTED',
+    dataOrigin,
     outcome: 'INTERRUPTED',
     elapsedMs,
     visits: safeVisits,
@@ -512,71 +553,77 @@ export function stepCompensatorySaccadeTrial(
   cursor: { x: number; y: number },
   deltaMs: number,
   params: VisualScanningParameters,
-  isGazeValid: boolean = true
+  isGazeValid: boolean = true,
+  dwellDeltaMs?: number,
+  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED'
 ): CompensatorySaccadeTrialBody | null {
   if (state.completed) return null;
+
+  const { safeDeltaMs, effectiveDwellDelta } = resolveStepDeltas(deltaMs, dwellDeltaMs);
+  const minFixMs = Math.round(params.minimumFixationMs);
+  const maxStimulusMs = Math.round(params.maximumStimulusDurationMs);
 
   if (state.phase === 'CENTRAL_ANCHOR') {
     const dist = Math.hypot(state.anchor.x - cursor.x, state.anchor.y - cursor.y);
     if (dist <= state.anchor.acceptanceRadius && isGazeValid) {
-      state.anchor.dwellTimeMs += deltaMs;
+      state.anchor.dwellTimeMs += effectiveDwellDelta;
       if (state.anchor.dwellTimeMs >= state.anchorHoldRequiredMs) {
         state.anchor.found = true;
         state.phase = 'PERIPHERAL_TARGET';
         state.saccadeElapsedMs = 0;
       }
     } else {
-      state.anchor.dwellTimeMs = Math.max(0, state.anchor.dwellTimeMs - deltaMs * 1.35);
+      state.anchor.dwellTimeMs = Math.max(0, state.anchor.dwellTimeMs - safeDeltaMs * 1.35);
     }
     return null;
   }
 
   // Phase 2: PERIPHERAL_TARGET
-  state.saccadeElapsedMs += deltaMs;
+  state.saccadeElapsedMs += safeDeltaMs;
   const target = state.peripheralTarget;
   const dist = Math.hypot(target.x - cursor.x, target.y - cursor.y);
 
   if (dist <= target.acceptanceRadius && isGazeValid) {
-    target.dwellTimeMs += deltaMs;
-    if (target.dwellTimeMs >= params.minimumFixationMs) {
+    target.dwellTimeMs += effectiveDwellDelta;
+    if (target.dwellTimeMs >= minFixMs) {
       target.found = true;
       state.completed = true;
       state.outcome = 'SUCCESS';
 
       const confirmedDwellMs = Math.min(
-        params.maximumStimulusDurationMs,
-        Math.max(params.minimumFixationMs, Math.round(target.dwellTimeMs))
+        maxStimulusMs,
+        Math.max(minFixMs, Math.round(target.dwellTimeMs))
       );
       const elapsedMs = Math.min(
-        params.maximumStimulusDurationMs,
+        maxStimulusMs,
         Math.max(confirmedDwellMs, Math.round(state.saccadeElapsedMs))
       );
 
       return {
         schemaVersion: 1,
         trialId: state.trialId,
-        dataOrigin: 'PRODUCER_REPORTED',
+        dataOrigin,
         outcome: 'SUCCESS',
         confirmedDwellMs,
         elapsedMs,
       };
     }
   } else {
-    target.dwellTimeMs = Math.max(0, target.dwellTimeMs - deltaMs * 1.25);
+    target.dwellTimeMs = Math.max(0, target.dwellTimeMs - safeDeltaMs * 1.25);
   }
 
-  if (state.saccadeElapsedMs >= params.maximumStimulusDurationMs) {
+  if (state.saccadeElapsedMs >= maxStimulusMs) {
     state.completed = true;
     state.outcome = 'TIMEOUT';
     const elapsedMs = Math.max(
-      params.maximumStimulusDurationMs,
+      maxStimulusMs,
       Math.round(state.saccadeElapsedMs)
     );
 
     return {
       schemaVersion: 1,
       trialId: state.trialId,
-      dataOrigin: 'PRODUCER_REPORTED',
+      dataOrigin,
       outcome: 'TIMEOUT',
       confirmedDwellMs: null,
       elapsedMs,
@@ -588,18 +635,20 @@ export function stepCompensatorySaccadeTrial(
 
 export function interruptCompensatorySaccadeTrial(
   state: CompensatorySaccadeTrialState,
-  params: VisualScanningParameters
+  params: VisualScanningParameters,
+  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED'
 ): CompensatorySaccadeTrialBody {
   state.completed = true;
   state.outcome = 'INTERRUPTED';
+  const maxStimulusMs = Math.round(params.maximumStimulusDurationMs);
   const elapsedMs = Math.min(
-    Math.max(0, params.maximumStimulusDurationMs - 1),
+    Math.max(0, maxStimulusMs - 1),
     Math.max(1, Math.round(state.saccadeElapsedMs || 1))
   );
   return {
     schemaVersion: 1,
     trialId: state.trialId,
-    dataOrigin: 'PRODUCER_REPORTED',
+    dataOrigin,
     outcome: 'INTERRUPTED',
     confirmedDwellMs: null,
     elapsedMs,

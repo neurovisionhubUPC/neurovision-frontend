@@ -3,6 +3,7 @@ import type {
   VisualSearchParameters,
 } from '../../api/contracts/clinical.contracts';
 import type {
+  AnalyticsDataOrigin,
   SustainedFixationTrialBody,
   VisualSearchTrialBody,
 } from '../../api/contracts/analytics.contracts';
@@ -27,6 +28,16 @@ export function createUuid(): string {
 function clamp(val: number, min: number, max: number): number {
   if (!Number.isFinite(val)) return min;
   return Math.max(min, Math.min(max, val));
+}
+
+function resolveStepDeltas(
+  deltaMs: number,
+  dwellDeltaMs?: number
+): { safeDeltaMs: number; effectiveDwellDelta: number } {
+  const safeDeltaMs = Number.isFinite(deltaMs) ? Math.max(0, deltaMs) : 0;
+  const rawDwell = dwellDeltaMs ?? safeDeltaMs;
+  const effectiveDwellDelta = Number.isFinite(rawDwell) ? Math.max(0, rawDwell) : 0;
+  return { safeDeltaMs, effectiveDwellDelta };
 }
 
 /* ==========================================================================
@@ -266,13 +277,19 @@ export function stepVisualSearchTrial(
   cursor: { x: number; y: number },
   deltaMs: number,
   params: VisualSearchParameters,
-  isGazeValid: boolean = true
+  isGazeValid: boolean = true,
+  dwellDeltaMs?: number,
+  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED'
 ): VisualSearchTrialBody | null {
   if (state.completed) {
     return null;
   }
 
-  state.elapsedMs += deltaMs;
+  const { safeDeltaMs, effectiveDwellDelta } = resolveStepDeltas(deltaMs, dwellDeltaMs);
+  const minFixMs = Math.round(params.minimumFixationMs);
+  const maxSearchMs = Math.round(params.maximumSearchTimeMs);
+
+  state.elapsedMs += safeDeltaMs;
 
   for (let i = 0; i < state.entities.length; i++) {
     const entity = state.entities[i];
@@ -282,27 +299,27 @@ export function stepVisualSearchTrial(
     if (entity.kind === 'TARGET') {
       if (!entity.found) {
         if (hovering && isGazeValid) {
-          entity.dwellTimeMs += deltaMs;
-          if (entity.dwellTimeMs >= params.minimumFixationMs) {
+          entity.dwellTimeMs += effectiveDwellDelta;
+          if (entity.dwellTimeMs >= minFixMs) {
             entity.found = true;
             state.lastConfirmedDwellMs = entity.dwellTimeMs;
           }
         } else {
           // Smooth gaze jitter decay
-          entity.dwellTimeMs = Math.max(0, entity.dwellTimeMs - deltaMs * 1.5);
+          entity.dwellTimeMs = Math.max(0, entity.dwellTimeMs - safeDeltaMs * 1.5);
         }
       }
     } else {
       // DISTRACTOR entity
       if (hovering && isGazeValid) {
         const previousDwell = entity.dwellTimeMs;
-        entity.dwellTimeMs += deltaMs;
+        entity.dwellTimeMs += effectiveDwellDelta;
         if (previousDwell < 250 && entity.dwellTimeMs >= 250) {
           entity.falseFixationCount += 1;
           state.falseFixations += 1;
         }
       } else {
-        entity.dwellTimeMs = Math.max(0, entity.dwellTimeMs - deltaMs * 2.0);
+        entity.dwellTimeMs = Math.max(0, entity.dwellTimeMs - safeDeltaMs * 2.0);
       }
     }
   }
@@ -315,21 +332,21 @@ export function stepVisualSearchTrial(
     state.completed = true;
     state.outcome = 'SUCCESS';
     const confirmedDwellMs = Math.min(
-      params.maximumSearchTimeMs,
+      maxSearchMs,
       Math.max(
-        params.minimumFixationMs,
-        Math.round(state.lastConfirmedDwellMs || params.minimumFixationMs)
+        minFixMs,
+        Math.round(state.lastConfirmedDwellMs || minFixMs)
       )
     );
     const searchDurationMs = Math.min(
-      params.maximumSearchTimeMs,
+      maxSearchMs,
       Math.max(confirmedDwellMs, Math.round(state.elapsedMs))
     );
 
     return {
       schemaVersion: 1,
       trialId: state.trialId,
-      dataOrigin: 'PRODUCER_REPORTED',
+      dataOrigin,
       outcome: 'SUCCESS',
       confirmedDwellMs,
       searchDurationMs,
@@ -337,18 +354,18 @@ export function stepVisualSearchTrial(
   }
 
   // Check timeout
-  if (state.elapsedMs >= params.maximumSearchTimeMs) {
+  if (state.elapsedMs >= maxSearchMs) {
     state.completed = true;
     state.outcome = 'TIMEOUT';
     const searchDurationMs = Math.max(
-      params.maximumSearchTimeMs,
+      maxSearchMs,
       Math.round(state.elapsedMs)
     );
 
     return {
       schemaVersion: 1,
       trialId: state.trialId,
-      dataOrigin: 'PRODUCER_REPORTED',
+      dataOrigin,
       outcome: 'TIMEOUT',
       confirmedDwellMs: null,
       searchDurationMs,
@@ -363,19 +380,21 @@ export function stepVisualSearchTrial(
  */
 export function interruptVisualSearchTrial(
   state: VisualSearchTrialState,
-  params: VisualSearchParameters
+  params: VisualSearchParameters,
+  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED'
 ): VisualSearchTrialBody {
   state.completed = true;
   state.outcome = 'INTERRUPTED';
+  const maxSearchMs = Math.round(params.maximumSearchTimeMs);
   const duration = Math.min(
-    Math.max(0, params.maximumSearchTimeMs - 1),
+    Math.max(0, maxSearchMs - 1),
     Math.max(0, Math.round(state.elapsedMs))
   );
 
   return {
     schemaVersion: 1,
     trialId: state.trialId,
-    dataOrigin: 'PRODUCER_REPORTED',
+    dataOrigin,
     outcome: 'INTERRUPTED',
     confirmedDwellMs: null,
     searchDurationMs: duration,
@@ -499,27 +518,33 @@ export function stepSustainedFixationTrial(
   cursor: { x: number; y: number },
   deltaMs: number,
   params: FixationParameters,
-  isGazeValid: boolean = true
+  isGazeValid: boolean = true,
+  dwellDeltaMs?: number,
+  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED'
 ): SustainedFixationTrialBody | null {
   if (state.completed) {
     return null;
   }
 
-  state.elapsedMs += deltaMs;
+  const { safeDeltaMs, effectiveDwellDelta } = resolveStepDeltas(deltaMs, dwellDeltaMs);
+  const minFixMs = Math.round(params.minimumFixationMs);
+  const maxFixMs = Math.round(params.maximumFixationMs);
+
+  state.elapsedMs += safeDeltaMs;
 
   const dist = Math.hypot(state.x - cursor.x, state.y - cursor.y);
-  const hovering = dist <= state.acceptanceRadius && isGazeValid;
+  const hovering = dist <= state.acceptanceRadius;
 
-  if (hovering) {
+  if (hovering && isGazeValid) {
     state.outsideGraceMs = 0;
-    state.insideTargetMs += deltaMs;
-    state.currentContinuousInsideMs += deltaMs;
+    state.insideTargetMs += effectiveDwellDelta;
+    state.currentContinuousInsideMs += effectiveDwellDelta;
 
     if (state.currentContinuousInsideMs > state.longestContinuousInsideMs) {
       state.longestContinuousInsideMs = state.currentContinuousInsideMs;
     }
   } else {
-    state.outsideGraceMs += deltaMs;
+    state.outsideGraceMs += safeDeltaMs;
     if (state.outsideGraceMs > 90) {
       if (state.currentContinuousInsideMs > 0) {
         state.fixationLosses += 1;
@@ -531,22 +556,24 @@ export function stepSustainedFixationTrial(
   const elapsedInt = Math.max(1, Math.round(state.elapsedMs));
 
   // Check SUCCESS: sustained fixation meets or exceeds minimumFixationMs
-  if (state.currentContinuousInsideMs >= params.minimumFixationMs ||
-      state.longestContinuousInsideMs >= params.minimumFixationMs) {
+  if (
+    state.currentContinuousInsideMs >= minFixMs ||
+    state.longestContinuousInsideMs >= minFixMs
+  ) {
     const longestInt = clamp(
       Math.round(state.longestContinuousInsideMs),
-      params.minimumFixationMs,
-      params.maximumFixationMs
+      minFixMs,
+      maxFixMs
     );
     const insideInt = clamp(
       Math.round(state.insideTargetMs),
       longestInt,
-      params.maximumFixationMs
+      maxFixMs
     );
     const elapsedFinal = clamp(
       elapsedInt,
       insideInt,
-      params.maximumFixationMs
+      maxFixMs
     );
 
     state.completed = true;
@@ -555,7 +582,7 @@ export function stepSustainedFixationTrial(
     return {
       schemaVersion: 1,
       trialId: state.id,
-      dataOrigin: 'PRODUCER_REPORTED',
+      dataOrigin,
       outcome: 'SUCCESS',
       elapsedMs: elapsedFinal,
       insideTargetMs: insideInt,
@@ -564,8 +591,8 @@ export function stepSustainedFixationTrial(
   }
 
   // Check TIMEOUT
-  if (state.elapsedMs >= params.maximumFixationMs) {
-    const elapsedFinal = params.maximumFixationMs;
+  if (state.elapsedMs >= maxFixMs) {
+    const elapsedFinal = maxFixMs;
     const insideInt = clamp(
       Math.round(state.insideTargetMs),
       0,
@@ -574,7 +601,7 @@ export function stepSustainedFixationTrial(
     const longestInt = clamp(
       Math.round(state.longestContinuousInsideMs),
       0,
-      Math.min(insideInt, Math.max(0, params.minimumFixationMs - 1))
+      Math.min(insideInt, Math.max(0, minFixMs - 1))
     );
 
     state.completed = true;
@@ -583,7 +610,7 @@ export function stepSustainedFixationTrial(
     return {
       schemaVersion: 1,
       trialId: state.id,
-      dataOrigin: 'PRODUCER_REPORTED',
+      dataOrigin,
       outcome: 'TIMEOUT',
       elapsedMs: elapsedFinal,
       insideTargetMs: insideInt,
@@ -600,10 +627,17 @@ export function stepSustainedFixationTrial(
  */
 export function interruptSustainedFixationTrial(
   state: FixationTrialState,
-  params?: FixationParameters
+  params?: FixationParameters,
+  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED'
 ): SustainedFixationTrialBody {
-  const maxFixationMs = params?.maximumFixationMs ?? Number.MAX_SAFE_INTEGER;
-  const minFixationMs = params?.minimumFixationMs ?? Number.MAX_SAFE_INTEGER;
+  const maxFixationMs =
+    params?.maximumFixationMs !== undefined
+      ? Math.round(params.maximumFixationMs)
+      : Number.MAX_SAFE_INTEGER;
+  const minFixationMs =
+    params?.minimumFixationMs !== undefined
+      ? Math.round(params.minimumFixationMs)
+      : Number.MAX_SAFE_INTEGER;
   const elapsedFinal = clamp(
     Math.round(state.elapsedMs),
     1,
@@ -626,7 +660,7 @@ export function interruptSustainedFixationTrial(
   return {
     schemaVersion: 1,
     trialId: state.id,
-    dataOrigin: 'PRODUCER_REPORTED',
+    dataOrigin,
     outcome: 'INTERRUPTED',
     elapsedMs: elapsedFinal,
     insideTargetMs: insideInt,
