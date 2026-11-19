@@ -8,6 +8,7 @@ import {
   Eye
 } from 'lucide-react';
 import type { Patient } from '../../../../core/domain/Patient';
+import { useAppStore } from '../../../../core/store/useAppStore';
 
 export interface TreatingDoctorOverview {
   fullName?: string | null;
@@ -33,41 +34,47 @@ export const PatientOverviewCard: React.FC<PatientOverviewCardProps> = ({
   adherenceRate,
   treatingDoctor,
 }) => {
+  const authMode = useAppStore((state) => state.authMode);
+  const accessToken = useAppStore((state) => state.accessToken);
+  const isCognitoMode = authMode === 'COGNITO' && Boolean(accessToken);
+
   const stats = patient.stats || {
     globalAdherence: patient.adherence.rate,
-    completedSessions: 28,
-    scheduledSessions: 30,
-    meanFatigue: 1.8,
-    totalTherapyHours: 5.6,
-    validatedSessions: 27,
-    totalRecordedSessions: 28,
+    completedSessions: isCognitoMode ? 0 : 28,
+    scheduledSessions: isCognitoMode ? 0 : 30,
+    meanFatigue: isCognitoMode ? 0 : 1.8,
+    totalTherapyHours: isCognitoMode ? 0 : 5.6,
+    validatedSessions: isCognitoMode ? 0 : 27,
+    totalRecordedSessions: isCognitoMode ? 0 : 28,
   };
 
-  const completedSessions = completedSessionsCount ?? stats.completedSessions ?? 28;
-  const scheduledSessions = scheduledSessionsCount ?? stats.scheduledSessions ?? 30;
-  const therapyHours = totalTherapyHours !== undefined ? totalTherapyHours : (stats.totalTherapyHours ?? 5.6);
-  const globalAdherence = adherenceRate !== undefined ? adherenceRate : (stats.globalAdherence ?? patient.adherence.rate ?? 92);
+  const completedSessions = completedSessionsCount ?? stats.completedSessions ?? 0;
+  const scheduledSessions = scheduledSessionsCount ?? stats.scheduledSessions ?? 0;
+  const therapyHours = totalTherapyHours !== undefined ? totalTherapyHours : (stats.totalTherapyHours ?? 0);
+  const globalAdherence = adherenceRate !== undefined ? adherenceRate : (stats.globalAdherence ?? patient.adherence.rate ?? 0);
 
   const doctorName =
     treatingDoctor?.fullName ||
-    patient.treatingDoctor?.name ||
-    'Dra. Elena Ramos Morales, M.D.';
+    (isCognitoMode
+      ? 'Médico Especialista Asignado'
+      : patient.treatingDoctor?.name || 'Dra. Elena Ramos Morales, M.D.');
   const doctorSpecialty =
     treatingDoctor?.specialty ||
-    patient.treatingDoctor?.specialty ||
-    'Neuroftalmología';
+    (isCognitoMode
+      ? 'Neurorrehabilitación'
+      : patient.treatingDoctor?.specialty || 'Neuroftalmología');
   const doctorCmp =
     treatingDoctor?.cmpNumber ||
-    patient.treatingDoctor?.idNumber;
+    (isCognitoMode ? undefined : patient.treatingDoctor?.idNumber);
   const doctorHospital =
     treatingDoctor?.hospital ||
-    patient.treatingDoctor?.hospital ||
-    patient.facility ||
-    'NeuroVisión Clinical';
+    (isCognitoMode
+      ? 'NeuroVisión Clinical'
+      : patient.treatingDoctor?.hospital || patient.facility || 'NeuroVisión Clinical');
 
   const metaPercent = scheduledSessions > 0
     ? Math.round((completedSessions / scheduledSessions) * 100)
-    : 100;
+    : 0;
 
   return (
     <section className="bg-white rounded-xl border border-[#071524]/10 p-4 sm:p-6 md:p-7 shadow-xs">
@@ -86,12 +93,20 @@ export const PatientOverviewCard: React.FC<PatientOverviewCardProps> = ({
               <span className="px-2.5 py-0.5 rounded-md text-xs font-bold uppercase bg-[#DBF1FE] text-[#071524] border border-[#071524]/15">
                 HC {patient.medicalRecordNumber}
               </span>
-              <span className="px-2.5 py-0.5 rounded-md text-xs font-semibold bg-[#DBF1FE] text-[#44474C]">
-                DNI: {patient.nationalId}
-              </span>
-              <span className="px-2.5 py-0.5 rounded-md text-xs font-semibold bg-[#DBF1FE] text-[#44474C]">
-                {patient.age} años ({patient.gender})
-              </span>
+              {!isCognitoMode && (
+                <span className="px-2.5 py-0.5 rounded-md text-xs font-semibold bg-[#DBF1FE] text-[#44474C]">
+                  DNI: {patient.nationalId}
+                </span>
+              )}
+              {patient.age > 0 ? (
+                <span className="px-2.5 py-0.5 rounded-md text-xs font-semibold bg-[#DBF1FE] text-[#44474C]">
+                  {patient.age} años ({patient.gender})
+                </span>
+              ) : (
+                <span className="px-2.5 py-0.5 rounded-md text-xs font-semibold bg-[#DBF1FE] text-[#005049]">
+                  Estado: {patient.accountStatus === 'PENDING' ? 'Evaluación Pendiente' : 'Activo en Clinical'}
+                </span>
+              )}
             </div>
 
             {/* Primary Diagnosis */}
@@ -140,54 +155,93 @@ export const PatientOverviewCard: React.FC<PatientOverviewCardProps> = ({
       {/* Quick Clinical Stats Chips */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mt-5 sm:mt-6">
         <div className="bg-[#E6F6FF] p-4 rounded-xl border border-[#071524]/10 flex flex-col justify-between">
-          <span className="text-xs text-[#44474C] font-semibold uppercase tracking-wider">
-            Adherencia Global
-          </span>
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-xs text-[#44474C] font-semibold uppercase tracking-wider">
+              {isCognitoMode ? 'Tasa de Finalización' : 'Adherencia Global'}
+            </span>
+            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-white/80 text-[#006A62]">
+              {isCognitoMode ? 'Clinical 8083' : 'Demo'}
+            </span>
+          </div>
           <div className="mt-1 flex items-baseline justify-between">
             <span className="text-2xl font-bold text-[#071524]">
-              {globalAdherence}%
+              {isCognitoMode && scheduledSessions === 0 ? 'N/D' : `${globalAdherence}%`}
             </span>
             <span className="inline-flex items-center text-xs font-bold text-[#006A62]">
               <TrendingUp className="w-3.5 h-3.5 mr-0.5" />
-              {globalAdherence >= 80 ? 'Óptima' : globalAdherence >= 60 ? 'Aceptable' : 'Subóptima'}
+              {isCognitoMode && scheduledSessions === 0
+                ? 'Sin sesiones'
+                : globalAdherence >= 80
+                ? 'Óptima'
+                : globalAdherence >= 60
+                ? 'Aceptable'
+                : 'Subóptima'}
             </span>
           </div>
         </div>
 
         <div className="bg-[#E6F6FF] p-4 rounded-xl border border-[#071524]/10 flex flex-col justify-between">
-          <span className="text-xs text-[#44474C] font-semibold uppercase tracking-wider">
-            Sesiones Realizadas
-          </span>
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-xs text-[#44474C] font-semibold uppercase tracking-wider">
+              {isCognitoMode ? 'Sesiones Completadas' : 'Sesiones Realizadas'}
+            </span>
+            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-white/80 text-[#006A62]">
+              {isCognitoMode ? 'Clinical 8083' : 'Demo'}
+            </span>
+          </div>
           <div className="mt-1 flex items-baseline justify-between">
             <span className="text-2xl font-bold text-[#071524]">
               {completedSessions}{' '}
               <span className="text-sm font-normal text-[#44474C]">/ {scheduledSessions}</span>
             </span>
             <span className="text-xs font-semibold text-[#44474C]">
-              {metaPercent}% meta
+              {isCognitoMode ? `${metaPercent}% registradas` : `${metaPercent}% meta`}
             </span>
           </div>
         </div>
 
         <div className="bg-[#E6F6FF] p-4 rounded-xl border border-[#071524]/10 flex flex-col justify-between">
-          <span className="text-xs text-[#44474C] font-semibold uppercase tracking-wider">
-            Fatiga Ocular Media
-          </span>
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-xs text-[#44474C] font-semibold uppercase tracking-wider">
+              {isCognitoMode ? 'Estado Clínico' : 'Fatiga Ocular Media'}
+            </span>
+            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-white/80 text-[#006A62]">
+              {isCognitoMode ? 'Clinical 8083' : 'Demo'}
+            </span>
+          </div>
           <div className="mt-1 flex items-baseline justify-between">
-            <span className="text-2xl font-bold text-[#071524]">
-              {stats.meanFatigue}{' '}
-              <span className="text-sm font-normal text-[#44474C]">/ 5.0</span>
-            </span>
-            <span className="inline-flex items-center text-xs font-semibold text-[#006A62]">
-              Bajo impacto
-            </span>
+            {isCognitoMode ? (
+              <>
+                <span className="text-lg font-bold text-[#071524]">
+                  {patient.accountStatus === 'PENDING' ? 'Pendiente' : 'En Seguimiento'}
+                </span>
+                <span className="inline-flex items-center text-[11px] font-semibold text-[#44474C]">
+                  Fatiga: N/D en API
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="text-2xl font-bold text-[#071524]">
+                  {stats.meanFatigue}{' '}
+                  <span className="text-sm font-normal text-[#44474C]">/ 5.0</span>
+                </span>
+                <span className="inline-flex items-center text-xs font-semibold text-[#006A62]">
+                  Bajo impacto
+                </span>
+              </>
+            )}
           </div>
         </div>
 
         <div className="bg-[#E6F6FF] p-4 rounded-xl border border-[#071524]/10 flex flex-col justify-between">
-          <span className="text-xs text-[#44474C] font-semibold uppercase tracking-wider">
-            Tiempo Total Terapia
-          </span>
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-xs text-[#44474C] font-semibold uppercase tracking-wider">
+              Tiempo Activo Terapia
+            </span>
+            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-white/80 text-[#006A62]">
+              {isCognitoMode ? 'Clinical 8083' : 'Demo'}
+            </span>
+          </div>
           <div className="mt-1 flex items-baseline justify-between">
             <span className="text-2xl font-bold text-[#071524]">
               {typeof therapyHours === 'number' ? therapyHours.toFixed(1) : therapyHours}{' '}

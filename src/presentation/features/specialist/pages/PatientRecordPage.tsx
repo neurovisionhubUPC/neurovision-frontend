@@ -115,8 +115,8 @@ function mapDoctorSessionToRecord(summary: DoctorTherapySessionSummary): Session
     moduleName: EXERCISE_LABELS[summary.exerciseCode] || summary.exerciseCode,
     moduleDetail: `Config v${summary.configurationVersion} · Cuota ${summary.quotaDate}`,
     durationMinutes,
-    complianceRate: isCompleted ? 100 : summary.status === 'ACTIVE' ? 50 : 30,
-    fovealPrecision: isCompleted ? 95 : 70,
+    complianceRate: isCompleted ? 100 : 0,
+    fovealPrecision: 0,
     isValid: isCompleted,
     validationStatus: isCompleted
       ? 'VALID_OPTIMAL'
@@ -366,17 +366,18 @@ export const PatientRecordPage: React.FC = () => {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  // Cálculo de estadísticas dinámicas reales
+  // Cálculo de estadísticas dinámicas reales (sin mezcla con valores demo en modo COGNITO)
   const clinicalStats = useMemo(() => {
-    if (isCognitoMode && doctorSessions.length > 0) {
+    if (isCognitoMode) {
+      const totalRecorded = doctorSessions.length;
       const completed = doctorSessions.filter((s) => s.status === 'COMPLETED').length;
       const totalSeconds = doctorSessions.reduce((acc, s) => acc + (s.activeDurationSeconds || 0), 0);
       const totalHours = Number((totalSeconds / 3600).toFixed(1));
-      const scheduled = currentPatient.stats?.scheduledSessions || 30;
-      const adherence = Math.min(100, Math.round((completed / Math.max(1, scheduled)) * 100));
+      const adherence =
+        totalRecorded > 0 ? Math.min(100, Math.round((completed / totalRecorded) * 100)) : 0;
       return {
         completedSessionsCount: completed,
-        scheduledSessionsCount: scheduled,
+        scheduledSessionsCount: totalRecorded,
         totalTherapyHours: totalHours,
         adherenceRate: adherence,
       };

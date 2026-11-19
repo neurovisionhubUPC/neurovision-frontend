@@ -140,7 +140,7 @@ function mapSummaryToSessionRecord(
   const isCompleted = summary.status === 'COMPLETED';
   const modeLabel = enrichment?.mode ? MODE_LABELS[enrichment.mode] : undefined;
 
-  let complianceRate = isCompleted ? 100 : summary.status === 'ACTIVE' ? 50 : 35;
+  let complianceRate = isCompleted ? 100 : 0;
   if (enrichment?.target && enrichment.target > 0) {
     if (enrichment.criterion === 'REPETITIONS' && enrichment.completedRepetitions !== null && enrichment.completedRepetitions !== undefined) {
       complianceRate = Math.min(100, Math.round((enrichment.completedRepetitions / enrichment.target) * 100));
@@ -163,7 +163,7 @@ function mapSummaryToSessionRecord(
       : `Config v${summary.configurationVersion} · Cuota ${summary.quotaDate}`,
     durationMinutes,
     complianceRate,
-    fovealPrecision: isCompleted ? 95 : 70,
+    fovealPrecision: 0,
     isValid: isCompleted,
     validationStatus: isCompleted
       ? 'VALID_OPTIMAL'

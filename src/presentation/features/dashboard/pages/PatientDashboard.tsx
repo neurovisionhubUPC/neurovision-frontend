@@ -580,7 +580,7 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
     }
   };
 
-  // Progress View derived data for Cognito mode
+  // Progress View derived data for Cognito mode (100% real from activePlan.dailyAvailability, no synthetic +2 or 7-day history)
   const cognitoProgressView = useMemo(() => {
     if (!Array.isArray(plans) || plans.length === 0) return null;
     const activePlan = plans.find((p) => p.status === 'ACTIVE') || plans[0];
@@ -590,12 +590,6 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
     const dailyCompletionPercentage = Math.min(
       100,
       Math.round((completedTodaySessions / dailyLimit) * 100)
-    );
-
-    const totalPlanTarget = dailyLimit * 7;
-    const planCompletionPercentage = Math.min(
-      100,
-      Math.round(((completedTodaySessions + 2) / totalPlanTarget) * 100)
     );
 
     const items: ProgressItem[] = activePlan.effectiveConfigurations.map((cfg) => {
@@ -617,11 +611,6 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
           ? 1
           : 0;
       const completedRunsToday = Math.max(0, dailyTargetRuns - remainingRunsToday);
-      const totalPlannedRuns = dailyTargetRuns * 7;
-      const completedRunsInPlan = Math.max(
-        completedRunsToday,
-        Math.min(totalPlannedRuns, completedRunsToday + 2)
-      );
 
       return {
         exerciseCode: cfg.exerciseCode,
@@ -629,8 +618,8 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
         modeLabel: MODE_LABELS[params.mode] || params.mode,
         completedRunsToday,
         dailyTargetRuns,
-        completedRunsInPlan,
-        totalPlannedRuns,
+        completedRunsInPlan: completedRunsToday,
+        totalPlannedRuns: dailyTargetRuns,
         remainingRunsToday,
         availabilityStatus:
           avail?.status || (activePlan.status === 'ACTIVE' ? 'AVAILABLE' : 'BLOCKED'),
@@ -638,12 +627,22 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
       };
     });
 
+    const totalPrescribedRunsToday = items.reduce((acc, it) => acc + it.dailyTargetRuns, 0);
+    const totalCompletedRunsToday = items.reduce((acc, it) => acc + it.completedRunsToday, 0);
+    const planCompletionPercentage =
+      totalPrescribedRunsToday > 0
+        ? Math.min(100, Math.round((totalCompletedRunsToday / totalPrescribedRunsToday) * 100))
+        : dailyCompletionPercentage;
+
     return {
       plan: activePlan,
       dailyCompletionPercentage,
       planCompletionPercentage,
       completedTodaySessions,
+      remainingSlots,
       dailyLimit,
+      totalCompletedRunsToday,
+      totalPrescribedRunsToday,
       items,
     };
   }, [plans]);
@@ -1226,7 +1225,7 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
               </div>
             </div>
 
-            {/* Metas Diarias y Progreso Acumulado */}
+            {/* Metas Diarias y Cumplimiento de Cuota Diaria */}
             {(() => {
               const view = isCognitoMode ? cognitoProgressView : mockProgressView;
               const dailyPct = view?.dailyCompletionPercentage ?? 0;
@@ -1238,7 +1237,9 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
                   <div className="bg-white border border-[#DCEBF4] rounded-2xl p-6 shadow-xs space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold uppercase tracking-wider text-[#455A64]">
-                        Meta Diaria Cumplida
+                        {isCognitoMode
+                          ? 'Sesiones Diarias (Clinical API 8083)'
+                          : 'Meta Diaria Cumplida'}
                       </span>
                       <Target size={18} className="text-[#0F6F62]" />
                     </div>
@@ -1264,18 +1265,26 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
                     </div>
                   </div>
 
-                  {/* Card 2: Avance del Plan Clínico */}
+                  {/* Card 2: Cumplimiento de Cuota Diaria (Clinical API 8083) */}
                   <div className="bg-white border border-[#DCEBF4] rounded-2xl p-6 shadow-xs space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold uppercase tracking-wider text-[#455A64]">
-                        Adherencia al Plan Activo
+                        {isCognitoMode
+                          ? 'Cumplimiento de Cuota Diaria (Clinical API 8083)'
+                          : 'Adherencia al Plan Activo (Demo)'}
                       </span>
                       <TrendingUp size={18} className="text-[#26A69A]" />
                     </div>
                     <div className="flex items-baseline space-x-2">
                       <span className="text-4xl font-extrabold text-[#1C2A39]">{planPct}%</span>
                       <span className="text-xs font-semibold text-[#455A64]">
-                        Rendimiento semanal
+                        {isCognitoMode
+                          ? `${cognitoProgressView?.totalCompletedRunsToday ?? 0} / ${
+                              cognitoProgressView?.totalPrescribedRunsToday ?? 0
+                            } prescripciones hoy · ${
+                              cognitoProgressView?.remainingSlots ?? 0
+                            } cupo(s) libre(s)`
+                          : 'Rendimiento semanal demo'}
                       </span>
                     </div>
                     {/* Accessible Progress Bar */}
@@ -1284,7 +1293,7 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
                       aria-valuenow={planPct}
                       aria-valuemin={0}
                       aria-valuemax={100}
-                      aria-label="Porcentaje de avance en plan terapéutico"
+                      aria-label="Porcentaje de cumplimiento de cuota diaria"
                       className="w-full bg-[#E2EEF5] rounded-full h-3.5 overflow-hidden"
                     >
                       <div
@@ -1294,22 +1303,33 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
                     </div>
                   </div>
 
-                  {/* Card 3: Racha y Estado */}
+                  {/* Card 3: Vigencia de Cuota Diaria (Cognito) vs Racha Demo (Mock) */}
                   <div className="bg-white border border-[#DCEBF4] rounded-2xl p-6 shadow-xs space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold uppercase tracking-wider text-[#455A64]">
-                        Constancia Terapéutica
+                        {isCognitoMode
+                          ? 'Fecha de Cuota & Estado (8083)'
+                          : 'Constancia Terapéutica (Demo)'}
                       </span>
                       <Award size={18} className="text-[#F4A261]" />
                     </div>
                     <div className="flex items-baseline space-x-2">
-                      <span className="text-4xl font-extrabold text-[#B85D19]">5 Días</span>
+                      <span className="text-2xl sm:text-3xl font-extrabold text-[#B85D19]">
+                        {isCognitoMode
+                          ? cognitoProgressView?.plan.dailyAvailability.quotaDate || 'Sin plan activo'
+                          : '5 Días'}
+                      </span>
                       <span className="text-xs font-semibold text-[#455A64]">
-                        Seguidos sin interrupción
+                        {isCognitoMode
+                          ? `Plan ${cognitoProgressView?.plan.status || 'N/D'}`
+                          : 'Seguidos sin interrupción'}
                       </span>
                     </div>
                     <p className="text-xs text-[#0F6F62] font-semibold flex items-center gap-1.5 pt-1">
-                      <CheckCircle2 size={15} /> Estimulación visual continua óptima
+                      <CheckCircle2 size={15} />{' '}
+                      {isCognitoMode
+                        ? `${cognitoProgressView?.items.length ?? 0} módulo(s) configurado(s) en Clinical API`
+                        : 'Estimulación visual continua óptima [Datos Demo]'}
                     </p>
                   </div>
                 </div>
@@ -1419,12 +1439,18 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
                             </div>
                           </div>
 
-                          {/* Plan total */}
+                          {/* Cuota Diaria Prescrita (Cognito) vs Plan Total (Demo) */}
                           <div className="space-y-1.5">
                             <div className="flex justify-between text-xs font-semibold">
-                              <span className="text-[#455A64]">Cumplimiento en el plan:</span>
+                              <span className="text-[#455A64]">
+                                {isCognitoMode
+                                  ? 'Cuota diaria prescrita (8083):'
+                                  : 'Cumplimiento en el plan (Demo):'}
+                              </span>
                               <span className="text-[#1C2A39] font-bold">
-                                {item.completedRunsInPlan} / {item.totalPlannedRuns} ({planPct}%)
+                                {isCognitoMode
+                                  ? `${item.remainingRunsToday} libre(s) / ${item.dailyTargetRuns} pautado(s)`
+                                  : `${item.completedRunsInPlan} / ${item.totalPlannedRuns} (${planPct}%)`}
                               </span>
                             </div>
                             <div
@@ -1432,7 +1458,7 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
                               aria-valuenow={planPct}
                               aria-valuemin={0}
                               aria-valuemax={100}
-                              aria-label={`Avance general en plan para ${item.exerciseTitle}`}
+                              aria-label={`Avance de cuota para ${item.exerciseTitle}`}
                               className="w-full bg-[#E2EEF5] rounded-full h-2.5 overflow-hidden"
                             >
                               <div
@@ -1460,40 +1486,55 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
               <div className="flex items-center justify-between border-b border-[#E2EEF5] pb-3">
                 <h3 className="text-lg font-bold text-[#1C2A39] flex items-center gap-2">
                   <Activity size={18} className="text-[#0F6F62]" />
-                  <span>Historial de Eventos y Sesión Actual</span>
+                  <span>Estado de Sesión Actual (Clinical API 8083)</span>
                 </h3>
                 <span className="text-xs font-mono text-[#455A64]">
-                  {isCognitoMode && currentSessionRes?.session
-                    ? `Sesión ID: ${currentSessionRes.session.therapySessionId.slice(0, 10)}...`
-                    : 'Modo Local'}
+                  {isCognitoMode
+                    ? currentSessionRes?.session
+                      ? `Sesión ID: ${currentSessionRes.session.therapySessionId.slice(0, 10)}...`
+                      : `Estado: ${currentSessionRes?.state || 'NONE'} [Clinical 8083]`
+                    : 'Modo Local [Demo]'}
                 </span>
               </div>
 
-              {isCognitoMode && currentSessionRes?.session ? (
-                <div className="space-y-3">
-                  <div className="bg-[#E6F6FF] border border-[#BDE0F3] rounded-xl p-4 text-xs space-y-2">
-                    <p className="font-bold text-[#1C2A39]">
-                      Sesión activa: {EXERCISE_LABELS[currentSessionRes.session.exerciseCode]?.title}
-                    </p>
-                    <p className="text-[#455A64]">
-                      Iniciada a las{' '}
-                      {new Date(currentSessionRes.session.startedAt).toLocaleTimeString('es-ES')} ·
-                      Estado: <strong>{currentProgress?.activityState || currentSessionRes.session.status}</strong>
-                    </p>
-                    {currentProgress && (
-                      <p className="text-[#0F6F62] font-semibold">
-                        Métricas en vivo: {currentProgress.completedRepetitions} / {currentProgress.target} repeticiones ({Math.round(currentProgress.activeMilliseconds / 1000)}s activos)
+              {isCognitoMode ? (
+                currentSessionRes?.session ? (
+                  <div className="space-y-3">
+                    <div className="bg-[#E6F6FF] border border-[#BDE0F3] rounded-xl p-4 text-xs space-y-2">
+                      <p className="font-bold text-[#1C2A39]">
+                        Sesión ({currentSessionRes.state}):{' '}
+                        {EXERCISE_LABELS[currentSessionRes.session.exerciseCode]?.title}
                       </p>
-                    )}
+                      <p className="text-[#455A64]">
+                        Iniciada a las{' '}
+                        {new Date(currentSessionRes.session.startedAt).toLocaleTimeString('es-ES')} ·
+                        Estado: <strong>{currentProgress?.activityState || currentSessionRes.session.status}</strong>
+                      </p>
+                      {currentProgress && (
+                        <p className="text-[#0F6F62] font-semibold">
+                          Progreso técnico real (8083): {currentProgress.completedRepetitions} /{' '}
+                          {currentProgress.target} repeticiones (
+                          {Math.round(currentProgress.activeMilliseconds / 1000)}s activos)
+                        </p>
+                      )}
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="bg-[#F8FBFE] border border-[#E2EEF5] rounded-xl p-4 text-xs text-[#455A64]">
+                    No hay ninguna sesión terapéutica activa en este momento (
+                    <code className="font-mono text-[#1C2A39]">
+                      state: {currentSessionRes?.state || 'NONE'}
+                    </code>
+                    ). Seleccione un módulo disponible en la pestaña de Ejercicios para iniciar una nueva sesión supervisada.
+                  </div>
+                )
               ) : (
                 <div className="space-y-2.5">
                   <div className="flex items-start gap-3 p-3 rounded-xl bg-[#F8FBFE] border border-[#E2EEF5] text-xs">
                     <span className="w-2 h-2 rounded-full bg-[#0F6F62] mt-1.5 shrink-0" />
                     <div>
                       <p className="font-bold text-[#1C2A39]">
-                        10:15 - Módulo Búsqueda Visual completado
+                        10:15 - Módulo Búsqueda Visual completado [Demo]
                       </p>
                       <p className="text-[#455A64]">
                         Sesión supervisada de 12 minutos con precisión del 92% y latencia media sacádica de 312 ms.
@@ -1505,7 +1546,7 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
                     <span className="w-2 h-2 rounded-full bg-[#26A69A] mt-1.5 shrink-0" />
                     <div>
                       <p className="font-bold text-[#1C2A39]">
-                        09:58 - Pre-calibración ocular y ambiental validada
+                        09:58 - Pre-calibración ocular y ambiental validada [Demo]
                       </p>
                       <p className="text-[#455A64]">
                         Alineación cefálica óptima a 50 cm con 420 Lux en habitación. Calibración R² = 96%.

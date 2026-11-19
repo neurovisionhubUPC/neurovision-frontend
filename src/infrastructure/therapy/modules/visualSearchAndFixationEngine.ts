@@ -265,7 +265,8 @@ export function stepVisualSearchTrial(
   state: VisualSearchTrialState,
   cursor: { x: number; y: number },
   deltaMs: number,
-  params: VisualSearchParameters
+  params: VisualSearchParameters,
+  isGazeValid: boolean = true
 ): VisualSearchTrialBody | null {
   if (state.completed) {
     return null;
@@ -280,7 +281,7 @@ export function stepVisualSearchTrial(
 
     if (entity.kind === 'TARGET') {
       if (!entity.found) {
-        if (hovering) {
+        if (hovering && isGazeValid) {
           entity.dwellTimeMs += deltaMs;
           if (entity.dwellTimeMs >= params.minimumFixationMs) {
             entity.found = true;
@@ -293,7 +294,7 @@ export function stepVisualSearchTrial(
       }
     } else {
       // DISTRACTOR entity
-      if (hovering) {
+      if (hovering && isGazeValid) {
         const previousDwell = entity.dwellTimeMs;
         entity.dwellTimeMs += deltaMs;
         if (previousDwell < 250 && entity.dwellTimeMs >= 250) {
@@ -313,9 +314,12 @@ export function stepVisualSearchTrial(
   if (allTargetsFound) {
     state.completed = true;
     state.outcome = 'SUCCESS';
-    const confirmedDwellMs = Math.max(
-      params.minimumFixationMs,
-      Math.round(state.lastConfirmedDwellMs || params.minimumFixationMs)
+    const confirmedDwellMs = Math.min(
+      params.maximumSearchTimeMs,
+      Math.max(
+        params.minimumFixationMs,
+        Math.round(state.lastConfirmedDwellMs || params.minimumFixationMs)
+      )
     );
     const searchDurationMs = Math.min(
       params.maximumSearchTimeMs,
@@ -364,7 +368,7 @@ export function interruptVisualSearchTrial(
   state.completed = true;
   state.outcome = 'INTERRUPTED';
   const duration = Math.min(
-    params.maximumSearchTimeMs,
+    Math.max(0, params.maximumSearchTimeMs - 1),
     Math.max(0, Math.round(state.elapsedMs))
   );
 
@@ -481,20 +485,21 @@ export function createSustainedFixationTrial(
  * Calculations:
  * - elapsedInt = Math.max(1, Math.round(state.elapsedMs))
  * - In SUCCESS:
- *     longestInt = Math.max(params.minimumFixationMs, Math.round(state.longestContinuousInsideMs))
- *     insideInt = Math.max(longestInt, Math.round(state.insideTargetMs))
- *     elapsedFinal = Math.min(params.maximumFixationMs, Math.max(insideInt, elapsedInt))
- *     (with guaranteed longestInt <= insideInt <= elapsedFinal)
+ *     longestInt = clamp(Math.round(state.longestContinuousInsideMs), params.minimumFixationMs, params.maximumFixationMs)
+ *     insideInt = clamp(Math.round(state.insideTargetMs), longestInt, params.maximumFixationMs)
+ *     elapsedFinal = clamp(elapsedInt, insideInt, params.maximumFixationMs)
+ *     (with guaranteed minimumFixationMs <= longestInt <= insideInt <= elapsedFinal <= maximumFixationMs)
  * - In TIMEOUT (state.elapsedMs >= params.maximumFixationMs):
- *     elapsedFinal = Math.max(params.maximumFixationMs, elapsedInt)
- *     insideInt = Math.min(elapsedFinal, Math.max(0, Math.round(state.insideTargetMs)))
- *     longestInt = Math.min(insideInt, Math.max(0, Math.round(state.longestContinuousInsideMs)))
+ *     elapsedFinal = params.maximumFixationMs
+ *     insideInt = clamp(Math.round(state.insideTargetMs), 0, elapsedFinal)
+ *     longestInt = clamp(Math.round(state.longestContinuousInsideMs), 0, Math.min(insideInt, Math.max(0, params.minimumFixationMs - 1)))
  */
 export function stepSustainedFixationTrial(
   state: FixationTrialState,
   cursor: { x: number; y: number },
   deltaMs: number,
-  params: FixationParameters
+  params: FixationParameters,
+  isGazeValid: boolean = true
 ): SustainedFixationTrialBody | null {
   if (state.completed) {
     return null;
@@ -503,7 +508,7 @@ export function stepSustainedFixationTrial(
   state.elapsedMs += deltaMs;
 
   const dist = Math.hypot(state.x - cursor.x, state.y - cursor.y);
-  const hovering = dist <= state.acceptanceRadius;
+  const hovering = dist <= state.acceptanceRadius && isGazeValid;
 
   if (hovering) {
     state.outsideGraceMs = 0;
@@ -528,23 +533,21 @@ export function stepSustainedFixationTrial(
   // Check SUCCESS: sustained fixation meets or exceeds minimumFixationMs
   if (state.currentContinuousInsideMs >= params.minimumFixationMs ||
       state.longestContinuousInsideMs >= params.minimumFixationMs) {
-    let longestInt = Math.max(
+    const longestInt = clamp(
+      Math.round(state.longestContinuousInsideMs),
       params.minimumFixationMs,
-      Math.round(state.longestContinuousInsideMs)
+      params.maximumFixationMs
     );
-    let insideInt = Math.max(longestInt, Math.round(state.insideTargetMs));
-    let elapsedFinal = Math.min(
-      params.maximumFixationMs,
-      Math.max(insideInt, elapsedInt)
+    const insideInt = clamp(
+      Math.round(state.insideTargetMs),
+      longestInt,
+      params.maximumFixationMs
     );
-
-    // Strictly enforce contract invariant: longestInt <= insideInt <= elapsedFinal
-    if (elapsedFinal < insideInt) {
-      elapsedFinal = insideInt;
-    }
-    if (insideInt < longestInt) {
-      insideInt = longestInt;
-    }
+    const elapsedFinal = clamp(
+      elapsedInt,
+      insideInt,
+      params.maximumFixationMs
+    );
 
     state.completed = true;
     state.outcome = 'SUCCESS';
@@ -562,14 +565,16 @@ export function stepSustainedFixationTrial(
 
   // Check TIMEOUT
   if (state.elapsedMs >= params.maximumFixationMs) {
-    const elapsedFinal = Math.max(params.maximumFixationMs, elapsedInt);
-    const insideInt = Math.min(
-      elapsedFinal,
-      Math.max(0, Math.round(state.insideTargetMs))
+    const elapsedFinal = params.maximumFixationMs;
+    const insideInt = clamp(
+      Math.round(state.insideTargetMs),
+      0,
+      elapsedFinal
     );
-    const longestInt = Math.min(
-      insideInt,
-      Math.max(0, Math.round(state.longestContinuousInsideMs))
+    const longestInt = clamp(
+      Math.round(state.longestContinuousInsideMs),
+      0,
+      Math.min(insideInt, Math.max(0, params.minimumFixationMs - 1))
     );
 
     state.completed = true;
@@ -591,20 +596,28 @@ export function stepSustainedFixationTrial(
 
 /**
  * Prematurely interrupts an active sustained fixation trial, preserving the backend invariant:
- * longestInt <= insideInt <= elapsedFinal
+ * longestInt <= insideInt <= elapsedFinal < maximumFixationMs and longestInt < minimumFixationMs
  */
 export function interruptSustainedFixationTrial(
   state: FixationTrialState,
-  _params?: FixationParameters
+  params?: FixationParameters
 ): SustainedFixationTrialBody {
-  const elapsedFinal = Math.max(1, Math.round(state.elapsedMs));
-  const insideInt = Math.min(
-    elapsedFinal,
-    Math.max(0, Math.round(state.insideTargetMs))
+  const maxFixationMs = params?.maximumFixationMs ?? Number.MAX_SAFE_INTEGER;
+  const minFixationMs = params?.minimumFixationMs ?? Number.MAX_SAFE_INTEGER;
+  const elapsedFinal = clamp(
+    Math.round(state.elapsedMs),
+    1,
+    Math.max(1, maxFixationMs - 1)
   );
-  const longestInt = Math.min(
-    insideInt,
-    Math.max(0, Math.round(state.longestContinuousInsideMs))
+  const insideInt = clamp(
+    Math.round(state.insideTargetMs),
+    0,
+    elapsedFinal
+  );
+  const longestInt = clamp(
+    Math.round(state.longestContinuousInsideMs),
+    0,
+    Math.min(insideInt, Math.max(0, minFixationMs - 1))
   );
 
   state.completed = true;

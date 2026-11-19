@@ -1111,6 +1111,17 @@ export const SessionTelemetryAuditPage: React.FC = () => {
                   <p className="text-xs text-[#44474C]">
                     Heatmap, Gaze Plot [0..1], Replay Sincronizado y Muestras Crudas (8084 + 8085)
                   </p>
+                  <div className="flex flex-wrap items-center gap-1.5 mt-1.5 text-[10px] font-mono">
+                    <span className="px-2 py-0.5 rounded bg-[#E6F6FF] text-[#071524] border border-[#071524]/15">
+                      Sesión y Progreso: Clinical 8083
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-[#DCF8F2] text-[#005049] border border-[#006A62]/20">
+                      Heatmap / GazePlot / Replay / Ensayos: Analytics 8085
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-[#FEF3C7] text-[#92400E] border border-[#F59E0B]/30">
+                      Muestras Crudas (sampleTime = capturedAt + offsetMs): Telemetry 8084
+                    </span>
+                  </div>
                 </div>
               </div>
 

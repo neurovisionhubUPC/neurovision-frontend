@@ -132,6 +132,19 @@ interface ModuleSessionSummary {
   maxContinuousFixationMs: number;
   gamifiedPoints: number;
   maxStreak: number;
+  inputOrigin: 'WEBCAM_GAZE' | 'MOUSE_FALLBACK' | 'MIXED';
+  webcamSamplePercent: number;
+}
+
+interface PendingTelemetryBatch {
+  batchId: string;
+  therapySessionId: string;
+  streamId: string;
+  sequence: number;
+  capturedAt: string;
+  gazeSamples: TelemetryGazeSampleBody[];
+  gameplaySamples: TelemetryGameplaySampleBody[];
+  attempts: number;
 }
 
 function clamp01(val: number): number {
@@ -341,6 +354,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   const nextSequenceRef = useRef<number>(sessionProgress?.nextSequence ?? 0);
   const eventQueueRef = useRef<Promise<void>>(Promise.resolve());
   const telemetryQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const analyticsQueueRef = useRef<Promise<void>>(Promise.resolve());
   const isBootstrappedRef = useRef<boolean>(false);
   const isCompletingRef = useRef<boolean>(false);
   const latestProgressRef = useRef<PatientSessionProgressResponse | null>(
@@ -356,11 +370,18 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   const telemetrySequenceRef = useRef<number>(0);
   const gazeBufferRef = useRef<TelemetryGazeSampleBody[]>([]);
   const gameplayBufferRef = useRef<TelemetryGameplaySampleBody[]>([]);
+  const pendingTelemetryBatchesRef = useRef<PendingTelemetryBatch[]>([]);
   const batchCapturedAtRef = useRef<string | null>(null);
+  const batchBaseEpochMsRef = useRef<number>(0);
+  const batchStartPerfRef = useRef<number>(performance.now());
+  const lastEffectiveSampleEpochMsRef = useRef<number>(0);
   const sessionStartPerfRef = useRef<number>(performance.now());
   const lastGazeOffsetMsRef = useRef<number>(-1);
   const lastGameplayOffsetMsRef = useRef<number>(-1);
   const lastTelemetrySamplePerfRef = useRef<number>(0);
+  const prevMouseFallbackRef = useRef<boolean>(mouseFallbackEnabled);
+  const webcamGazeSamplesCountRef = useRef<number>(0);
+  const mouseFallbackSamplesCountRef = useRef<number>(0);
 
   // Sync incoming sessionProgress
   useEffect(() => {
@@ -383,9 +404,15 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
     telemetrySequenceRef.current = 0;
     gazeBufferRef.current = [];
     gameplayBufferRef.current = [];
+    pendingTelemetryBatchesRef.current = [];
     batchCapturedAtRef.current = null;
+    batchBaseEpochMsRef.current = 0;
+    batchStartPerfRef.current = performance.now();
+    lastEffectiveSampleEpochMsRef.current = 0;
     lastGazeOffsetMsRef.current = -1;
     lastGameplayOffsetMsRef.current = -1;
+    webcamGazeSamplesCountRef.current = 0;
+    mouseFallbackSamplesCountRef.current = 0;
     setCompletionState('IDLE');
     setBackendWarning(null);
     setTrialsSubmittedCount(0);
@@ -525,24 +552,31 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
     if (!isCognitoSession || !activeSessionId) {
       gazeBufferRef.current = [];
       gameplayBufferRef.current = [];
+      batchCapturedAtRef.current = null;
+      lastGazeOffsetMsRef.current = -1;
+      lastGameplayOffsetMsRef.current = -1;
       return Promise.resolve();
     }
 
-    if (gazeBufferRef.current.length === 0 && gameplayBufferRef.current.length === 0) {
-      return telemetryQueueRef.current;
-    }
+    if (gazeBufferRef.current.length > 0 || gameplayBufferRef.current.length > 0) {
+      const gazeSnapshot = gazeBufferRef.current;
+      const gameplaySnapshot = gameplayBufferRef.current;
+      const fallbackWallMs = Math.max(
+        Date.now(),
+        lastEffectiveSampleEpochMsRef.current + 1
+      );
+      const capturedAt =
+        batchCapturedAtRef.current || new Date(fallbackWallMs).toISOString();
 
-    const gazeSnapshot = gazeBufferRef.current;
-    const gameplaySnapshot = gameplayBufferRef.current;
-    const capturedAt = batchCapturedAtRef.current || new Date().toISOString();
+      gazeBufferRef.current = [];
+      gameplayBufferRef.current = [];
+      batchCapturedAtRef.current = null;
+      lastGazeOffsetMsRef.current = -1;
+      lastGameplayOffsetMsRef.current = -1;
 
-    gazeBufferRef.current = [];
-    gameplayBufferRef.current = [];
-    batchCapturedAtRef.current = null;
-
-    telemetryQueueRef.current = telemetryQueueRef.current.then(async () => {
       let gIdx = 0;
       let pIdx = 0;
+      const currentStreamId = streamIdRef.current;
 
       while (gIdx < gazeSnapshot.length || pIdx < gameplaySnapshot.length) {
         const gazeChunk = gazeSnapshot.slice(gIdx, gIdx + 500);
@@ -557,30 +591,105 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         const seq = telemetrySequenceRef.current;
         telemetrySequenceRef.current += 1;
 
-        try {
-          await telemetryApi.sendTelemetryBatch({
-            schemaVersion: 1,
-            batchId: createUuid(),
-            therapySessionId: activeSessionId,
-            streamId: streamIdRef.current,
-            sequence: seq,
-            capturedAt,
-            sentAt: new Date().toISOString(),
-            gazeSamples: gazeChunk,
-            gameplaySamples: gameplayChunk,
-          });
-        } catch (err) {
-          if (isMountedRef.current) {
-            setBackendWarning(
-              `Telemetría en búfer (${extractApiErrorMessage(err)})`
-            );
+        pendingTelemetryBatchesRef.current.push({
+          batchId: createUuid(),
+          therapySessionId: activeSessionId,
+          streamId: currentStreamId,
+          sequence: seq,
+          capturedAt,
+          gazeSamples: gazeChunk,
+          gameplaySamples: gameplayChunk,
+          attempts: 0,
+        });
+      }
+
+      if (pendingTelemetryBatchesRef.current.length > 60) {
+        pendingTelemetryBatchesRef.current.splice(
+          0,
+          pendingTelemetryBatchesRef.current.length - 60
+        );
+      }
+    }
+
+    if (pendingTelemetryBatchesRef.current.length === 0) {
+      return telemetryQueueRef.current;
+    }
+
+    telemetryQueueRef.current = telemetryQueueRef.current.then(async () => {
+      while (pendingTelemetryBatchesRef.current.length > 0) {
+        const batch = pendingTelemetryBatchesRef.current[0];
+        let processed = false;
+
+        for (let tryIdx = 0; tryIdx < 2; tryIdx++) {
+          batch.attempts += 1;
+          try {
+            await telemetryApi.sendTelemetryBatch({
+              schemaVersion: 1,
+              batchId: batch.batchId,
+              therapySessionId: batch.therapySessionId,
+              streamId: batch.streamId,
+              sequence: batch.sequence,
+              capturedAt: batch.capturedAt,
+              sentAt: new Date().toISOString(),
+              gazeSamples: batch.gazeSamples,
+              gameplaySamples: batch.gameplaySamples,
+            });
+            pendingTelemetryBatchesRef.current.shift();
+            processed = true;
+            if (isMountedRef.current) {
+              setBackendWarning((prev) =>
+                prev && prev.startsWith('Telemetría en búfer') ? null : prev
+              );
+            }
+            break;
+          } catch (err) {
+            const isPermanentClientRejection =
+              err instanceof ApiError &&
+              (err.status === 400 || err.status === 401 || err.status === 403);
+            if (isPermanentClientRejection) {
+              pendingTelemetryBatchesRef.current.shift();
+              processed = true;
+              if (isMountedRef.current) {
+                setBackendWarning(
+                  `Lote de telemetría rechazado: ${extractApiErrorMessage(err)}`
+                );
+              }
+              break;
+            }
+
+            if (tryIdx === 0) {
+              await new Promise((resolve) => window.setTimeout(resolve, 350));
+            } else if (isMountedRef.current) {
+              setBackendWarning(
+                `Telemetría en búfer (${pendingTelemetryBatchesRef.current.length} lotes pendientes: ${extractApiErrorMessage(err)})`
+              );
+            }
           }
+        }
+
+        if (!processed) {
+          // Keep batch at head of queue so next interval or finishSession retries in sequence order
+          break;
         }
       }
     });
 
     return telemetryQueueRef.current;
   }, [isCognitoSession, activeSessionId]);
+
+  // Isolate telemetry streamId when switching input origin between Webcam Gaze and Mouse Fallback
+  useEffect(() => {
+    if (prevMouseFallbackRef.current !== localMouseFallback) {
+      prevMouseFallbackRef.current = localMouseFallback;
+      void flushTelemetryBuffer().then(() => {
+        streamIdRef.current = createUuid();
+        telemetrySequenceRef.current = 0;
+        batchCapturedAtRef.current = null;
+        lastGazeOffsetMsRef.current = -1;
+        lastGameplayOffsetMsRef.current = -1;
+      });
+    }
+  }, [localMouseFallback, flushTelemetryBuffer]);
 
   const [isMuted, setIsMuted] = useState<boolean>(() => therapyAudio.isMuted());
   const [moduleSummary, setModuleSummary] = useState<ModuleSessionSummary>({
@@ -592,6 +701,8 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
     maxContinuousFixationMs: 0,
     gamifiedPoints: 0,
     maxStreak: 0,
+    inputOrigin: mouseFallbackEnabled ? 'MOUSE_FALLBACK' : 'WEBCAM_GAZE',
+    webcamSamplePercent: mouseFallbackEnabled ? 0 : 100,
   });
 
   const handleToggleMute = useCallback(() => {
@@ -603,15 +714,17 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   }, []);
 
   const submitTrialAnalytics = useCallback(
-    (body: AnyTrialBody) => {
-      if (!isCognitoSession || !activeSessionId) return;
+    (body: AnyTrialBody): Promise<void> => {
+      if (!isCognitoSession || !activeSessionId) {
+        return Promise.resolve();
+      }
       try {
         const serializedSize = JSON.stringify(body).length;
         if (serializedSize >= 8192) {
-          return;
+          return Promise.resolve();
         }
       } catch {
-        return;
+        return Promise.resolve();
       }
 
       const slug = modeToAnalyticsSlug(resolvedMode);
@@ -622,8 +735,17 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
             setTrialsSubmittedCount((c) => c + 1);
           }
         } catch (err) {
-          if (!isRetry && err instanceof ApiError && err.status === 503) {
-            // Contract rule: on 503 WRITE_OUTCOME_UNKNOWN, replay the exact same trialId & body once
+          const isRetryable =
+            !isRetry &&
+            (!(err instanceof ApiError) ||
+              err.status === 503 ||
+              err.status === 502 ||
+              err.status === 504 ||
+              err.status === 429 ||
+              err.status === 0);
+          if (isRetryable) {
+            // Contract rule: on 503 WRITE_OUTCOME_UNKNOWN or transient network error, replay the exact same trialId & body once
+            await new Promise((resolve) => window.setTimeout(resolve, 300));
             await sendAttempt(true);
             return;
           }
@@ -633,7 +755,10 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         }
       };
 
-      void sendAttempt(false);
+      analyticsQueueRef.current = analyticsQueueRef.current.then(() =>
+        sendAttempt(false)
+      );
+      return analyticsQueueRef.current;
     },
     [isCognitoSession, activeSessionId, resolvedMode]
   );
@@ -909,6 +1034,22 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         ? 100
         : 0;
 
+    const webcamSamples = webcamGazeSamplesCountRef.current;
+    const mouseSamples = mouseFallbackSamplesCountRef.current;
+    const totalOriginSamples = webcamSamples + mouseSamples;
+    const inputOrigin: 'WEBCAM_GAZE' | 'MOUSE_FALLBACK' | 'MIXED' =
+      webcamSamples > 0 && mouseSamples > 0
+        ? 'MIXED'
+        : mouseSamples > 0 || localMouseFallback
+        ? 'MOUSE_FALLBACK'
+        : 'WEBCAM_GAZE';
+    const webcamSamplePercent =
+      totalOriginSamples > 0
+        ? Math.round((webcamSamples / totalOriginSamples) * 100)
+        : localMouseFallback
+        ? 0
+        : 100;
+
     return {
       successfulTrials: s.score,
       timedOutTrials: s.timedOutTrials,
@@ -918,8 +1059,10 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       maxContinuousFixationMs: Math.round(s.maxSessionContinuousFixationMs),
       gamifiedPoints: s.gamifiedPoints,
       maxStreak: s.maxStreak,
+      inputOrigin,
+      webcamSamplePercent,
     };
-  }, []);
+  }, [localMouseFallback]);
 
   const finishSession = useCallback(
     async (reason: 'TARGET_REACHED' | 'USER_EXIT') => {
@@ -947,13 +1090,17 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       // If exiting mid-trial, submit interrupted trial analytics without inflating REPETITION_FINISHED
       if (reason === 'USER_EXIT' && gameState.current.subPhase !== 'INTER_STIMULUS_REST') {
         if (gameState.current.trialElapsedMs > 150) {
-          submitTrialAnalytics(buildInterruptedTrialBody());
+          void submitTrialAnalytics(buildInterruptedTrialBody());
         }
       }
 
-      // Wait for ordered activity events & flush remaining telemetry samples
-      await eventQueueRef.current.catch(() => undefined);
-      await flushTelemetryBuffer();
+      // Wait for all in-flight trial results, ordered activity events & remaining telemetry samples
+      // BEFORE closing the clinical session (analytics requires a live ACTIVE clinical session!)
+      await Promise.all([
+        analyticsQueueRef.current.catch(() => undefined),
+        eventQueueRef.current.catch(() => undefined),
+        flushTelemetryBuffer().catch(() => undefined),
+      ]);
 
       let latestProg = latestProgressRef.current;
       try {
@@ -1464,11 +1611,16 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       const cursorX = normGazeX * width;
       const cursorY = normGazeY * height;
 
+      const rawGazeConfidence = gazeConfidenceRef
+        ? clamp01(gazeConfidenceRef.current)
+        : 0.85;
+      const isGazeSignalAvailable = localMouseFallback
+        ? true
+        : rawGazeConfidence >= 0.35;
+      const currentConf = localMouseFallback ? 0.95 : rawGazeConfidence;
+
       const s = gameState.current;
       if (deltaTime > 0) {
-        const currentConf = localMouseFallback
-          ? 0.95
-          : clamp01(gazeConfidenceRef?.current ?? 0.85);
         const stability = evaluateGazeSampleStability(
           { x: cursorX, y: cursorY },
           s.prevCursorPx,
@@ -1477,7 +1629,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
           { canvasWidth: width, canvasHeight: height }
         );
         s.cursorSpeedPxPerSec = stability.pixelVelocity;
-        s.isGazeStable = stability.isValidFixation;
+        s.isGazeStable = isGazeSignalAvailable && stability.isValidFixation;
         s.prevCursorPx = { x: cursorX, y: cursorY };
       }
 
@@ -1486,7 +1638,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         const tutTarget = s.entities[0];
         if (tutTarget) {
           const dist = Math.hypot(tutTarget.x - cursorX, tutTarget.y - cursorY);
-          const isHovering = dist < tutTarget.radius * 1.5;
+          const isHovering = isGazeSignalAvailable && dist < tutTarget.radius * 1.5;
           const minFix = Math.max(300, prescription.parameters.min_fixation_time || 800);
 
           if (isHovering && !isPausedRef.current) {
@@ -1529,6 +1681,15 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
             20,
             36
           );
+          if (!localMouseFallback && !isGazeSignalAvailable) {
+            ctx.font = 'bold 14px Inter, sans-serif';
+            ctx.fillStyle = '#FACC15';
+            ctx.fillText(
+              '⚠️ Rostro o mirada no detectada — reubíquese frente a la cámara',
+              20,
+              62
+            );
+          }
         }
       }
 
@@ -1547,14 +1708,21 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
           };
 
         if (!isPausedRef.current) {
-          trajectoryRef.current.push({
-            timestamp: time,
-            gaze: { x: normGazeX, y: normGazeY },
-            target: {
-              x: clamp01(primaryEntity.x / width),
-              y: clamp01(primaryEntity.y / height),
-            },
-          });
+          if (isGazeSignalAvailable) {
+            if (localMouseFallback) {
+              mouseFallbackSamplesCountRef.current += 1;
+            } else {
+              webcamGazeSamplesCountRef.current += 1;
+            }
+            trajectoryRef.current.push({
+              timestamp: time,
+              gaze: { x: normGazeX, y: normGazeY },
+              target: {
+                x: clamp01(primaryEntity.x / width),
+                y: clamp01(primaryEntity.y / height),
+              },
+            });
+          }
 
           // Sample telemetry (~30 Hz)
           const perfNow = performance.now();
@@ -1565,25 +1733,51 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
           ) {
             lastTelemetrySamplePerfRef.current = perfNow;
             if (!batchCapturedAtRef.current) {
-              batchCapturedAtRef.current = new Date().toISOString();
+              const nowWallMs = Math.max(
+                Date.now(),
+                lastEffectiveSampleEpochMsRef.current + 1
+              );
+              batchBaseEpochMsRef.current = nowWallMs;
+              batchCapturedAtRef.current = new Date(nowWallMs).toISOString();
+              batchStartPerfRef.current = perfNow;
+              lastGazeOffsetMsRef.current = -1;
+              lastGameplayOffsetMsRef.current = -1;
             }
 
-            const rawOffset = Math.max(0, Math.round(perfNow - sessionStartPerfRef.current));
-            const gazeOffset = Math.max(lastGazeOffsetMsRef.current + 1, rawOffset);
-            const gameplayOffset = Math.max(lastGameplayOffsetMsRef.current + 1, rawOffset);
-            lastGazeOffsetMsRef.current = gazeOffset;
+            const rawOffset = Math.max(
+              0,
+              Math.round(perfNow - batchStartPerfRef.current)
+            );
+            const gameplayOffset = Math.max(
+              lastGameplayOffsetMsRef.current + 1,
+              rawOffset
+            );
             lastGameplayOffsetMsRef.current = gameplayOffset;
+            let maxBatchOffset = gameplayOffset;
 
-            const confidence = localMouseFallback
-              ? 0.95
-              : clamp01(gazeConfidenceRef?.current ?? 0.85);
+            // Only emit ocular gazeSamples when genuine webcam gaze tracking is active and valid.
+            // In mouse fallback or during transient face/blink loss, gazeSamples remains []
+            // while gameplaySamples records the player state (`telemetry/integration.md` line 18).
+            if (!localMouseFallback && isGazeSignalAvailable) {
+              const gazeOffset = Math.max(
+                lastGazeOffsetMsRef.current + 1,
+                rawOffset
+              );
+              lastGazeOffsetMsRef.current = gazeOffset;
+              maxBatchOffset = Math.max(maxBatchOffset, gazeOffset);
 
-            gazeBufferRef.current.push({
-              offsetMs: gazeOffset,
-              x: normGazeX,
-              y: normGazeY,
-              confidence,
-            });
+              gazeBufferRef.current.push({
+                offsetMs: gazeOffset,
+                x: normGazeX,
+                y: normGazeY,
+                confidence: rawGazeConfidence,
+              });
+            }
+
+            lastEffectiveSampleEpochMsRef.current = Math.max(
+              lastEffectiveSampleEpochMsRef.current,
+              batchBaseEpochMsRef.current + maxBatchOffset
+            );
 
             const progressNorm =
               requiredReps !== null
@@ -1633,7 +1827,13 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
           // Update game mechanics via modular algorithmic engines
           if (resolvedMode === 'STANDARD_SCANNING' && s.standardState) {
             const p = frozenParams as VisualScanningParameters;
-            const res = stepStandardScanningTrial(s.standardState, cursorPt, deltaTime, p);
+            const res = stepStandardScanningTrial(
+              s.standardState,
+              cursorPt,
+              deltaTime,
+              p,
+              isGazeSignalAvailable
+            );
             s.entities = [s.standardState.target];
             if (s.standardState.target.dwellTimeMs > 60) {
               therapyAudio.playFixationTick(
@@ -1647,7 +1847,13 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
           } else if (resolvedMode === 'SYSTEMATIC_EXPLORATION' && s.explorationState) {
             const p = frozenParams as VisualScanningParameters;
             const prevStep = s.explorationState.currentStepIndex;
-            const res = stepSystematicExplorationTrial(s.explorationState, cursorPt, deltaTime, p);
+            const res = stepSystematicExplorationTrial(
+              s.explorationState,
+              cursorPt,
+              deltaTime,
+              p,
+              isGazeSignalAvailable
+            );
             if (s.explorationState.currentStepIndex > prevStep && !res) {
               const completedWp =
                 s.explorationState.waypoints[prevStep] ?? s.explorationState.waypoints[0];
@@ -1677,7 +1883,13 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
           } else if (resolvedMode === 'COMPENSATORY_SACCADE' && s.saccadeState) {
             const p = frozenParams as VisualScanningParameters;
             const prevPhase = s.saccadeState.phase;
-            const res = stepCompensatorySaccadeTrial(s.saccadeState, cursorPt, deltaTime, p);
+            const res = stepCompensatorySaccadeTrial(
+              s.saccadeState,
+              cursorPt,
+              deltaTime,
+              p,
+              isGazeSignalAvailable
+            );
             if (s.saccadeState.phase === 'CENTRAL_ANCHOR') {
               s.subPhase = 'CENTRAL_ANCHOR';
               s.entities = [s.saccadeState.anchor];
@@ -1713,7 +1925,13 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
             }
           } else if (resolvedMode === 'TARGET_SEARCH_WITH_DISTRACTORS' && s.searchState) {
             const p = frozenParams as VisualSearchParameters;
-            const res = stepVisualSearchTrial(s.searchState, cursorPt, deltaTime, p);
+            const res = stepVisualSearchTrial(
+              s.searchState,
+              cursorPt,
+              deltaTime,
+              p,
+              isGazeSignalAvailable
+            );
             const foundTargetsNow = s.searchState.entities.filter(
               (e) => e.kind === 'TARGET' && e.found
             );
@@ -1746,7 +1964,13 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
             }
           } else if (resolvedMode === 'SUSTAINED_TARGET_FIXATION' && s.fixationState) {
             const p = frozenParams as FixationParameters;
-            const res = stepSustainedFixationTrial(s.fixationState, cursorPt, deltaTime, p);
+            const res = stepSustainedFixationTrial(
+              s.fixationState,
+              cursorPt,
+              deltaTime,
+              p,
+              isGazeSignalAvailable
+            );
             s.insideTargetMs = s.fixationState.insideTargetMs;
             s.currentContinuousInsideMs = s.fixationState.currentContinuousInsideMs;
             s.longestContinuousInsideMs = s.fixationState.longestContinuousInsideMs;
@@ -1928,17 +2152,22 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
             : s.entities.find((e) => (e.kind === 'TARGET' || e.kind === 'WAYPOINT') && !e.found) ??
               primaryEntity;
 
+        const effectiveRescueElapsedMs =
+          resolvedMode === 'SYSTEMATIC_EXPLORATION'
+            ? s.explorationState?.currentQuadrantElapsedMs ?? s.trialElapsedMs
+            : s.trialElapsedMs;
+
         if (
           s.subPhase === 'ACTIVE_TRIAL' &&
           !rescueTarget.found &&
           rescueTarget.dwellTimeMs < 80 &&
-          s.trialElapsedMs >= maxTrialDurationMs * 0.65
+          effectiveRescueElapsedMs >= maxTrialDurationMs * 0.65
         ) {
           if (!isPausedRef.current) {
             therapyAudio.playPeripheralRescueBeacon(rescueTarget.x / width);
           }
 
-          const pulsePhase = (s.trialElapsedMs % 900) / 900;
+          const pulsePhase = (effectiveRescueElapsedMs % 900) / 900;
           const waveRadius = rescueTarget.radius + 14 + pulsePhase * 42;
           ctx.save();
           ctx.beginPath();
@@ -2044,7 +2273,20 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                 s.entities.filter((e) => e.kind === 'TARGET' && !e.found).length
               }`
             : `Error distancia: ${Math.round(distPrimary)} px`;
-        ctx.fillText(subHint, 20, 76);
+        const inputOriginHint = localMouseFallback
+          ? 'Origen: RATÓN FALLBACK (gameplaySamples)'
+          : `Origen: MIRADA WEBCAM (conf ${(rawGazeConfidence * 100).toFixed(0)}%)`;
+        ctx.fillText(`${subHint}  ·  ${inputOriginHint}`, 20, 76);
+
+        if (!localMouseFallback && !isGazeSignalAvailable) {
+          ctx.font = 'bold 14px Inter, sans-serif';
+          ctx.fillStyle = '#FACC15';
+          ctx.fillText(
+            '⚠️ Rostro/mirada no detectada — reubíquese frente a la cámara (acumulación en pausa)',
+            20,
+            98
+          );
+        }
       }
 
       // Gaze cursor indicator
@@ -2285,11 +2527,26 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
 
             {/* Module-Specific Clinical Trial Summary (PRODUCER_REPORTED) */}
             <div className="bg-white/10 border border-[#26A69A]/35 rounded-xl p-3.5 text-left space-y-2">
-              <div className="flex items-center justify-between text-xs font-bold text-[#8AE2D6]">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-[#8AE2D6]">
                 <span>Resultados del Módulo ({resolvedMode})</span>
-                <span className="font-mono text-[10px] bg-black/30 px-2 py-0.5 rounded">
-                  PRODUCER_REPORTED
-                </span>
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={`font-mono text-[10px] px-2 py-0.5 rounded ${
+                      moduleSummary.inputOrigin === 'WEBCAM_GAZE'
+                        ? 'bg-[#26A69A]/30 text-[#8AE2D6] border border-[#26A69A]/50'
+                        : 'bg-amber-500/25 text-amber-200 border border-amber-400/40'
+                    }`}
+                  >
+                    {moduleSummary.inputOrigin === 'WEBCAM_GAZE'
+                      ? 'ORIGEN: MIRADA WEBCAM (100%)'
+                      : moduleSummary.inputOrigin === 'MIXED'
+                      ? `ORIGEN: MIXTO (${moduleSummary.webcamSamplePercent}% WEBCAM)`
+                      : 'ORIGEN: CONTINGENCIA RATÓN'}
+                  </span>
+                  <span className="font-mono text-[10px] bg-black/30 px-2 py-0.5 rounded">
+                    PRODUCER_REPORTED
+                  </span>
+                </div>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
                 <div className="bg-black/25 rounded-lg p-2">

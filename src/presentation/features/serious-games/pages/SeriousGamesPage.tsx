@@ -188,7 +188,8 @@ export const SeriousGamesPage: React.FC = () => {
   const { videoRef, attachVideoElement, startWebcam, stopWebcam, isStreaming, error } = useWebcam();
   const { smooth } = useGazeSmoother(0.05, 0.9, 0.08);
   const gazeRef = useRef({ x: 0.5, y: 0.5 });
-  const gazeConfidenceRef = useRef<number>(0.85);
+  const gazeConfidenceRef = useRef<number>(0);
+  const lastValidGazePerfRef = useRef<number>(0);
   const frameRequestRef = useRef<number>(0);
   const debugRef = useRef<HTMLPreElement>(null);
 
@@ -363,7 +364,8 @@ export const SeriousGamesPage: React.FC = () => {
 
   const handleResumeDirectlyToMainGame = () => {
     if (!calibrationData && !mouseFallbackEnabled) {
-      setMouseFallbackEnabled(true);
+      startCalibration();
+      return;
     }
     useCalibrationStore.setState({
       isPreCalibrating: false,
@@ -501,13 +503,14 @@ Yaw: ${(results.rawMetrics.headPose.yaw * (180 / Math.PI)).toFixed(1)}° | Pitch
 
       if (calibrationData && results && results.rawMetrics) {
         if (results.rawMetrics.ear?.isBlinking) {
-          gazeConfidenceRef.current = 0.25;
+          gazeConfidenceRef.current = 0.0;
           return;
         }
 
         const predictedGaze = predictGazePoint(results.rawMetrics, calibrationData);
         const smoothed = smooth(predictedGaze);
         gazeRef.current = smoothed;
+        lastValidGazePerfRef.current = performance.now();
 
         const r2xRaw = calibrationData.leftModel?.r2X ?? 0.9;
         const r2yRaw = calibrationData.leftModel?.r2Y ?? 0.9;
@@ -533,20 +536,28 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
         }
       } else if (!results?.rawMetrics) {
         gazeConfidenceRef.current = 0.0;
+        if (debugRef.current && !mouseFallbackEnabled) {
+          debugRef.current.innerText =
+            'STATUS: ROSTRO/MIRADA NO DETECTADA\nReubíquese frente a la cámara para reanudar el seguimiento ocular.';
+        }
       }
     },
-    [smooth, calibrationData, addSample]
+    [smooth, calibrationData, addSample, mouseFallbackEnabled]
   );
 
   const { processVideoFrame, isReady, isLoaded } = useMediaPipeWorker(handleWorkerResults);
 
   // 2. Bucle de Captura del Video
   const captureLoop = useCallback(() => {
+    const now = performance.now();
     if (videoRef.current && isStreaming && isReady()) {
-      processVideoFrame(videoRef.current, performance.now());
+      processVideoFrame(videoRef.current, now);
+    }
+    if (!mouseFallbackEnabled && (!isStreaming || now - lastValidGazePerfRef.current > 450)) {
+      gazeConfidenceRef.current = 0.0;
     }
     frameRequestRef.current = requestAnimationFrame(captureLoop);
-  }, [isStreaming, isReady, processVideoFrame, videoRef]);
+  }, [isStreaming, isReady, processVideoFrame, videoRef, mouseFallbackEnabled]);
 
   useEffect(() => {
     if (calibrationData) {
@@ -724,7 +735,9 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
                     >
                       <Play size={13} className="fill-current" />
                       <span>
-                        {sessionProgress && sessionProgress.activityState !== 'NEW'
+                        {!calibrationData && !mouseFallbackEnabled
+                          ? 'Calibrar e Iniciar Terapia'
+                          : sessionProgress && sessionProgress.activityState !== 'NEW'
                           ? 'Continuar Terapia Ahora'
                           : 'Ir Directo al Ejercicio'}
                       </span>
