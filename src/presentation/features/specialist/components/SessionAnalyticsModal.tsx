@@ -91,7 +91,12 @@ export const SessionAnalyticsModal: React.FC<SessionAnalyticsModalProps> = ({
   const [streamSummary, setStreamSummary] = useState<AnalyticsSummaryResponse | null>(null);
   const [streamHeatmap, setStreamHeatmap] = useState<AnalyticsHeatmapResponse | null>(null);
   const [trialSummary, setTrialSummary] = useState<AnyTrialSummary | null>(null);
+  const [trialDataOrigin, setTrialDataOrigin] = useState<'PRODUCER_REPORTED' | 'SYNTHETIC'>(
+    'PRODUCER_REPORTED'
+  );
   const [trialNotice, setTrialNotice] = useState<string | null>(null);
+  const [trialError, setTrialError] = useState<string | null>(null);
+  const [loadingTrialSummary, setLoadingTrialSummary] = useState(false);
 
   useEffect(() => {
     if (!shouldFetchReal || !resolvedSessionId) {
@@ -101,6 +106,7 @@ export const SessionAnalyticsModal: React.FC<SessionAnalyticsModalProps> = ({
     let cancelled = false;
     setLoadingOverview(true);
     setOverviewError(null);
+    setStreamError(null);
     setSessionDetail(null);
     setStreams([]);
     setSelectedStreamId('');
@@ -108,6 +114,7 @@ export const SessionAnalyticsModal: React.FC<SessionAnalyticsModalProps> = ({
     setStreamHeatmap(null);
     setTrialSummary(null);
     setTrialNotice(null);
+    setTrialError(null);
 
     const loadOverview = async () => {
       try {
@@ -120,10 +127,8 @@ export const SessionAnalyticsModal: React.FC<SessionAnalyticsModalProps> = ({
 
         if (cancelled) return;
 
-        let loadedDetail: DoctorTherapySessionDetailResponse | null = null;
         if (detailOutcome.status === 'fulfilled') {
-          loadedDetail = detailOutcome.value;
-          setSessionDetail(loadedDetail);
+          setSessionDetail(detailOutcome.value);
         } else {
           setOverviewError(extractApiErrorMessage(detailOutcome.reason));
         }
@@ -134,31 +139,12 @@ export const SessionAnalyticsModal: React.FC<SessionAnalyticsModalProps> = ({
           if (items.length > 0) {
             setSelectedStreamId(items[0].streamId);
           }
-        } else {
-          setStreamError(extractApiErrorMessage(streamsOutcome.reason));
-        }
-
-        if (loadedDetail) {
-          const mode = extractModeFromDetail(loadedDetail);
-          const slug = modeToAnalyticsSlug(mode);
-          try {
-            const trial = await analyticsApi.getTrialSummary(
-              resolvedSessionId,
-              slug,
-              'PRODUCER_REPORTED'
-            );
-            if (!cancelled) {
-              setTrialSummary(trial);
-            }
-          } catch (trialErr) {
-            if (!cancelled) {
-              if (trialErr instanceof ApiError && trialErr.status === 404) {
-                setTrialNotice('Sin resultados de ensayos reportados (PRODUCER_REPORTED) para esta sesión.');
-              } else {
-                setTrialNotice(extractApiErrorMessage(trialErr));
-              }
-            }
-          }
+        } else if (
+          !(streamsOutcome.reason instanceof ApiError && streamsOutcome.reason.status === 404)
+        ) {
+          setStreamError(
+            `Error del servicio Analytics (8085): ${extractApiErrorMessage(streamsOutcome.reason)}`
+          );
         }
       } finally {
         if (!cancelled) {
@@ -173,6 +159,50 @@ export const SessionAnalyticsModal: React.FC<SessionAnalyticsModalProps> = ({
       cancelled = true;
     };
   }, [shouldFetchReal, resolvedPatientId, resolvedSessionId]);
+
+  useEffect(() => {
+    if (!shouldFetchReal || !resolvedSessionId || !sessionDetail) {
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingTrialSummary(true);
+    setTrialSummary(null);
+    setTrialNotice(null);
+    setTrialError(null);
+
+    const mode = extractModeFromDetail(sessionDetail);
+    const slug = modeToAnalyticsSlug(mode);
+
+    analyticsApi
+      .getTrialSummary(resolvedSessionId, slug, trialDataOrigin)
+      .then((trial) => {
+        if (!cancelled) {
+          setTrialSummary(trial);
+        }
+      })
+      .catch((trialErr) => {
+        if (cancelled) return;
+        if (trialErr instanceof ApiError && trialErr.status === 404) {
+          setTrialNotice(
+            `Sin resultados de ensayos (${trialDataOrigin}) para esta sesión.`
+          );
+        } else {
+          setTrialError(
+            `Error consultando ensayos en Analytics (8085): ${extractApiErrorMessage(trialErr)}`
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingTrialSummary(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [shouldFetchReal, resolvedSessionId, sessionDetail, trialDataOrigin]);
 
   useEffect(() => {
     if (!shouldFetchReal || !resolvedSessionId || !selectedStreamId) {
@@ -465,14 +495,36 @@ export const SessionAnalyticsModal: React.FC<SessionAnalyticsModalProps> = ({
               )}
             </div>
 
-            {/* Trial Summary (PRODUCER_REPORTED) */}
+            {/* Trial Summary */}
             <div className="p-4 rounded-xl bg-white border border-[#071524]/10 space-y-2">
-              <h4 className="font-bold text-xs text-[#071524] flex items-center gap-1.5">
-                <Target className="w-4 h-4 text-[#006A62]" />
-                Resumen de Ensayos Clínicos (PRODUCER_REPORTED)
-              </h4>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h4 className="font-bold text-xs text-[#071524] flex items-center gap-1.5">
+                  <Target className="w-4 h-4 text-[#006A62]" />
+                  Resumen de Ensayos Clínicos ({trialDataOrigin})
+                </h4>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={trialDataOrigin}
+                    onChange={(e) =>
+                      setTrialDataOrigin(e.target.value as 'PRODUCER_REPORTED' | 'SYNTHETIC')
+                    }
+                    aria-label="Origen de datos de ensayos clínicos"
+                    className="bg-[#F3FAFF] border border-[#071524]/15 rounded-lg px-2 py-1 text-[11px] font-semibold text-[#071524] focus:outline-none focus:ring-2 focus:ring-[#006A62] cursor-pointer"
+                  >
+                    <option value="PRODUCER_REPORTED">PRODUCER_REPORTED (Mirada Webcam)</option>
+                    <option value="SYNTHETIC">SYNTHETIC (Contingencia Ratón / Simulación)</option>
+                  </select>
+                  {loadingTrialSummary && (
+                    <span className="text-[11px] text-[#006A62]">Consultando...</span>
+                  )}
+                </div>
+              </div>
 
-              {trialSummary ? (
+              {trialError ? (
+                <div className="bg-[#FFDAD6] border border-[#BA1A1A]/30 rounded-lg p-2.5 text-xs text-[#93000A] font-semibold">
+                  {trialError}
+                </div>
+              ) : trialSummary ? (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] pt-1">
                   <div className="p-2 rounded bg-[#F3FAFF]">
                     <span className="text-[#44474C] block">Ensayos Reportados</span>

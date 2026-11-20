@@ -1,11 +1,11 @@
 export type BackendServiceName = 'iam' | 'profile' | 'clinical' | 'telemetry' | 'analytics';
 
 const SERVICE_BASE_URLS: Record<BackendServiceName, string> = {
-  iam: import.meta.env.VITE_IAM_API_URL || '',
-  profile: import.meta.env.VITE_PROFILE_API_URL || '',
-  clinical: import.meta.env.VITE_CLINICAL_API_URL || '',
-  telemetry: import.meta.env.VITE_TELEMETRY_API_URL || '',
-  analytics: import.meta.env.VITE_ANALYTICS_API_URL || '',
+  iam: import.meta.env?.VITE_IAM_API_URL || '',
+  profile: import.meta.env?.VITE_PROFILE_API_URL || '',
+  clinical: import.meta.env?.VITE_CLINICAL_API_URL || '',
+  telemetry: import.meta.env?.VITE_TELEMETRY_API_URL || '',
+  analytics: import.meta.env?.VITE_ANALYTICS_API_URL || '',
 };
 
 let tokenGetter: () => string | null = () => null;

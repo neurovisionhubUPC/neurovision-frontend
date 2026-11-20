@@ -18,6 +18,7 @@ import {
 import type { Patient } from '../../../../core/domain/Patient';
 import { useAppStore } from '../../../../core/store/useAppStore';
 import {
+  ApiError,
   analyticsApi,
   clinicalApi,
   extractApiErrorMessage,
@@ -83,9 +84,13 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
   const [streamHeatmap, setStreamHeatmap] = useState<AnalyticsHeatmapResponse | null>(null);
   const [streamGazePlot, setStreamGazePlot] = useState<AnalyticsGazePlotResponse | null>(null);
   const [trialSummary, setTrialSummary] = useState<AnyTrialSummary | null>(null);
+  const [trialDataOrigin, setTrialDataOrigin] = useState<'PRODUCER_REPORTED' | 'SYNTHETIC'>(
+    'PRODUCER_REPORTED'
+  );
   const [resolvedMode, setResolvedMode] = useState<ReportMode | null>(null);
   const [isLoadingTelemetry, setIsLoadingTelemetry] = useState(false);
   const [telemetryNotice, setTelemetryNotice] = useState<string | null>(null);
+  const [telemetryError, setTelemetryError] = useState<string | null>(null);
 
   // Identificador de sesión y paciente efectivos
   const effectiveSessionId = latestSessionId || patient?.sessionHistory?.[0]?.id || null;
@@ -101,11 +106,16 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
       setStreamGazePlot(null);
       setTrialSummary(null);
       setResolvedMode(null);
+      setTelemetryNotice(null);
+      setTelemetryError(null);
       return;
     }
 
+    const isNotFoundError = (err: unknown) => err instanceof ApiError && err.status === 404;
+
     setIsLoadingTelemetry(true);
     setTelemetryNotice(null);
+    setTelemetryError(null);
 
     try {
       // 1. Consultar lista de streams y detalle de sesión en paralelo para resolver el modo real
@@ -119,6 +129,11 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
       const streamItems =
         streamsOutcome.status === 'fulfilled' ? streamsOutcome.value.items || [] : [];
       setStreams(streamItems);
+
+      let analyticsFailureMessage: string | null = null;
+      if (streamsOutcome.status === 'rejected' && !isNotFoundError(streamsOutcome.reason)) {
+        analyticsFailureMessage = `Error del servicio Analytics (8085): ${extractApiErrorMessage(streamsOutcome.reason)}`;
+      }
 
       let modeForTrials: ReportMode | null = null;
       if (detailOutcome.status === 'fulfilled' && detailOutcome.value) {
@@ -135,7 +150,7 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
       setSelectedStreamId(streamToQuery);
 
       if (streamToQuery) {
-        // 2. Consultar en paralelo summary, heatmap, gaze-plot y trial-summary (PRODUCER_REPORTED)
+        // 2. Consultar en paralelo summary, heatmap, gaze-plot y trial-summary
         const [summaryOutcome, heatmapOutcome, gazePlotOutcome, trialOutcome] =
           await Promise.allSettled([
             analyticsApi.getStreamSummary(effectiveSessionId, streamToQuery),
@@ -144,7 +159,7 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
             analyticsApi.getTrialSummary(
               effectiveSessionId,
               trialSlug,
-              'PRODUCER_REPORTED'
+              trialDataOrigin
             ),
           ]);
 
@@ -152,24 +167,40 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
           setStreamSummary(summaryOutcome.value);
         } else {
           setStreamSummary(null);
+          if (!isNotFoundError(summaryOutcome.reason)) {
+            analyticsFailureMessage ??= `Error del servicio Analytics (8085): ${extractApiErrorMessage(summaryOutcome.reason)}`;
+          }
         }
 
         if (heatmapOutcome.status === 'fulfilled') {
           setStreamHeatmap(heatmapOutcome.value);
         } else {
           setStreamHeatmap(null);
+          if (!isNotFoundError(heatmapOutcome.reason)) {
+            analyticsFailureMessage ??= `Error del servicio Analytics (8085): ${extractApiErrorMessage(heatmapOutcome.reason)}`;
+          }
         }
 
         if (gazePlotOutcome.status === 'fulfilled') {
           setStreamGazePlot(gazePlotOutcome.value);
         } else {
           setStreamGazePlot(null);
+          if (!isNotFoundError(gazePlotOutcome.reason)) {
+            analyticsFailureMessage ??= `Error del servicio Analytics (8085): ${extractApiErrorMessage(gazePlotOutcome.reason)}`;
+          }
         }
 
         if (trialOutcome.status === 'fulfilled') {
           setTrialSummary(trialOutcome.value);
         } else {
           setTrialSummary(null);
+          if (!isNotFoundError(trialOutcome.reason)) {
+            analyticsFailureMessage ??= `Error del servicio Analytics (8085): ${extractApiErrorMessage(trialOutcome.reason)}`;
+          }
+        }
+
+        if (analyticsFailureMessage) {
+          setTelemetryError(analyticsFailureMessage);
         }
       } else {
         setStreamSummary(null);
@@ -179,16 +210,25 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
           const trialRes = await analyticsApi.getTrialSummary(
             effectiveSessionId,
             trialSlug,
-            'PRODUCER_REPORTED'
+            trialDataOrigin
           );
           setTrialSummary(trialRes);
-        } catch {
+        } catch (trialErr) {
           setTrialSummary(null);
+          if (!isNotFoundError(trialErr)) {
+            analyticsFailureMessage ??= `Error del servicio Analytics (8085): ${extractApiErrorMessage(trialErr)}`;
+          }
         }
-        setTelemetryNotice('La sesión seleccionada no cuenta con streams de telemetría 120Hz asociados en Analytics (8085).');
+        if (analyticsFailureMessage) {
+          setTelemetryError(analyticsFailureMessage);
+        } else {
+          setTelemetryNotice(
+            'La sesión seleccionada no cuenta con streams de telemetría 120Hz asociados en Analytics (8085).'
+          );
+        }
       }
     } catch (err) {
-      setTelemetryNotice(extractApiErrorMessage(err));
+      setTelemetryError(`Error del servicio Analytics (8085): ${extractApiErrorMessage(err)}`);
       setStreamSummary(null);
       setStreamHeatmap(null);
       setStreamGazePlot(null);
@@ -196,7 +236,7 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
     } finally {
       setIsLoadingTelemetry(false);
     }
-  }, [isCognitoMode, effectiveSessionId, effectivePatientId, selectedStreamId]);
+  }, [isCognitoMode, effectiveSessionId, effectivePatientId, selectedStreamId, trialDataOrigin]);
 
   useEffect(() => {
     void loadAnalyticsData();
@@ -374,9 +414,8 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
     let fovealLatency: number | null = isCognitoMode
       ? null
       : patient?.campimetryData?.fovealSearchLatencyMs ?? 225;
-    let latencySource: 'PRODUCER_REPORTED' | 'NO_DATA' | 'MOCK_BASELINE' = isCognitoMode
-      ? 'NO_DATA'
-      : 'MOCK_BASELINE';
+    let latencySource: 'PRODUCER_REPORTED' | 'SYNTHETIC' | 'NO_DATA' | 'MOCK_BASELINE' =
+      isCognitoMode ? 'NO_DATA' : 'MOCK_BASELINE';
 
     if (trialSummary) {
       if ('medianLocalizationDurationMs' in trialSummary) {
@@ -384,7 +423,7 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
         if (trialSummary.medianLocalizationDurationMs !== null) {
           fovealLatency = Math.round(trialSummary.medianLocalizationDurationMs);
           trialMetricValueText = `${fovealLatency} ms`;
-          latencySource = 'PRODUCER_REPORTED';
+          latencySource = trialDataOrigin;
         } else {
           trialMetricValueText = `N/D (${trialSummary.reportedTrialCount} ensayos)`;
         }
@@ -393,7 +432,7 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
         if (trialSummary.medianSearchDurationMs !== null) {
           fovealLatency = Math.round(trialSummary.medianSearchDurationMs);
           trialMetricValueText = `${fovealLatency} ms`;
-          latencySource = 'PRODUCER_REPORTED';
+          latencySource = trialDataOrigin;
         } else {
           trialMetricValueText = `N/D (${trialSummary.reportedTrialCount} ensayos)`;
         }
@@ -402,7 +441,7 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
         if (trialSummary.medianTimeToTargetMs !== null) {
           fovealLatency = Math.round(trialSummary.medianTimeToTargetMs);
           trialMetricValueText = `${fovealLatency} ms`;
-          latencySource = 'PRODUCER_REPORTED';
+          latencySource = trialDataOrigin;
         } else {
           trialMetricValueText = `N/D (${trialSummary.reportedTrialCount} ensayos)`;
         }
@@ -410,11 +449,11 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
         trialMetricLabel = 'Tiempo Dentro del Objetivo (Fijación)';
         fovealLatency = Math.round(trialSummary.totalInsideTargetMs);
         trialMetricValueText = `${(trialSummary.totalInsideTargetMs / 1000).toFixed(1)} s (${trialSummary.completedTargetCount} obj.)`;
-        latencySource = 'PRODUCER_REPORTED';
+        latencySource = trialDataOrigin;
       } else if ('traversals' in trialSummary) {
         trialMetricLabel = 'Recorridos Sistemáticos';
         trialMetricValueText = `${trialSummary.traversals.length} recorrido(s)`;
-        latencySource = 'PRODUCER_REPORTED';
+        latencySource = trialDataOrigin;
       }
     }
 
@@ -435,7 +474,7 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
       latencySource,
       hasTelemetry,
     };
-  }, [streamSummary, trialSummary, streamGazePlot, patient?.campimetryData, isCognitoMode]);
+  }, [streamSummary, trialSummary, streamGazePlot, patient?.campimetryData, isCognitoMode, trialDataOrigin]);
 
   return (
     <div className="space-y-6">
@@ -507,6 +546,23 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
           )}
 
           {isCognitoMode && (
+            <div className="inline-flex items-center gap-1.5 bg-[#F3FAFF] border border-[#071524]/10 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-[#071524]">
+              <span className="text-[11px] text-[#44474C]">Origen Ensayos:</span>
+              <select
+                value={trialDataOrigin}
+                onChange={(e) =>
+                  setTrialDataOrigin(e.target.value as 'PRODUCER_REPORTED' | 'SYNTHETIC')
+                }
+                aria-label="Origen de datos de ensayos clínicos"
+                className="bg-transparent border-none text-xs font-bold text-[#071524] outline-none cursor-pointer"
+              >
+                <option value="PRODUCER_REPORTED">PRODUCER_REPORTED (Mirada Webcam)</option>
+                <option value="SYNTHETIC">SYNTHETIC (Contingencia Ratón / Simulación)</option>
+              </select>
+            </div>
+          )}
+
+          {isCognitoMode && (
             <button
               type="button"
               onClick={() => void loadAnalyticsData()}
@@ -530,6 +586,14 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
           )}
         </div>
       </div>
+
+      {/* Error del servicio Analytics (503 / red) separado de ausencia de streams (404 / vacío) */}
+      {telemetryError && (
+        <div className="bg-[#FFDAD6] border border-[#BA1A1A]/30 text-[#93000A] rounded-xl p-3.5 flex items-center gap-2.5 text-xs font-semibold">
+          <AlertCircle className="w-4 h-4 shrink-0 text-[#93000A]" />
+          <span>{telemetryError}</span>
+        </div>
+      )}
 
       {/* Notificación diagnóstica clara cuando no hay telemetría en vivo */}
       {telemetryNotice && (

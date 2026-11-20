@@ -35,6 +35,10 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../../../core/store/useAppStore';
+import {
+  computeCognitoProgressView,
+  type CognitoProgressItem,
+} from '../utils/patientProgressMetrics';
 import type {
   FrozenClinicalExerciseParameters,
   MedicalPrescription,
@@ -581,71 +585,16 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
   };
 
   // Progress View derived data for Cognito mode (100% real from activePlan.dailyAvailability, no synthetic +2 or 7-day history)
-  const cognitoProgressView = useMemo(() => {
-    if (!Array.isArray(plans) || plans.length === 0) return null;
-    const activePlan = plans.find((p) => p.status === 'ACTIVE') || plans[0];
-    const dailyLimit = activePlan.dailySessionLimit || 1;
-    const remainingSlots = activePlan.dailyAvailability.remainingPlanSessionSlots ?? 0;
-    const completedTodaySessions = Math.max(0, dailyLimit - remainingSlots);
-    const dailyCompletionPercentage = Math.min(
-      100,
-      Math.round((completedTodaySessions / dailyLimit) * 100)
-    );
-
-    const items: ProgressItem[] = activePlan.effectiveConfigurations.map((cfg) => {
-      const meta = EXERCISE_LABELS[cfg.exerciseCode] || {
-        title: cfg.exerciseCode,
-        subtitle: cfg.exerciseCode,
-        goal: '',
-      };
-      const params = extractVersionedParameters(cfg).parameters;
-      const avail = activePlan.dailyAvailability.exercises.find(
-        (e) => e.exerciseCode === cfg.exerciseCode
-      );
-
-      const dailyTargetRuns = activePlan.dailyExercisePrescriptions?.[cfg.exerciseCode] ?? 1;
-      const remainingRunsToday =
-        avail?.remainingPrescribedSlots !== null && avail?.remainingPrescribedSlots !== undefined
-          ? avail.remainingPrescribedSlots
-          : avail?.status === 'AVAILABLE'
-          ? 1
-          : 0;
-      const completedRunsToday = Math.max(0, dailyTargetRuns - remainingRunsToday);
-
-      return {
-        exerciseCode: cfg.exerciseCode,
-        exerciseTitle: meta.title,
-        modeLabel: MODE_LABELS[params.mode] || params.mode,
-        completedRunsToday,
-        dailyTargetRuns,
-        completedRunsInPlan: completedRunsToday,
-        totalPlannedRuns: dailyTargetRuns,
-        remainingRunsToday,
-        availabilityStatus:
-          avail?.status || (activePlan.status === 'ACTIVE' ? 'AVAILABLE' : 'BLOCKED'),
-        reason: avail?.reason ? AVAILABILITY_REASON_LABELS[avail.reason] || avail.reason : null,
-      };
-    });
-
-    const totalPrescribedRunsToday = items.reduce((acc, it) => acc + it.dailyTargetRuns, 0);
-    const totalCompletedRunsToday = items.reduce((acc, it) => acc + it.completedRunsToday, 0);
-    const planCompletionPercentage =
-      totalPrescribedRunsToday > 0
-        ? Math.min(100, Math.round((totalCompletedRunsToday / totalPrescribedRunsToday) * 100))
-        : dailyCompletionPercentage;
-
-    return {
-      plan: activePlan,
-      dailyCompletionPercentage,
-      planCompletionPercentage,
-      completedTodaySessions,
-      remainingSlots,
-      dailyLimit,
-      totalCompletedRunsToday,
-      totalPrescribedRunsToday,
-      items,
-    };
-  }, [plans]);
+  const cognitoProgressView = useMemo(
+    () =>
+      computeCognitoProgressView(
+        plans,
+        EXERCISE_LABELS,
+        MODE_LABELS,
+        AVAILABILITY_REASON_LABELS
+      ),
+    [plans]
+  );
 
   // Progress View simulated data for Mock mode
   const mockProgressView = useMemo(() => {
@@ -1228,8 +1177,9 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
             {/* Metas Diarias y Cumplimiento de Cuota Diaria */}
             {(() => {
               const view = isCognitoMode ? cognitoProgressView : mockProgressView;
-              const dailyPct = view?.dailyCompletionPercentage ?? 0;
-              const planPct = view?.planCompletionPercentage ?? 0;
+              const dailyPct = view ? view.dailyCompletionPercentage : 0;
+              const planPct = view ? view.planCompletionPercentage : 0;
+              const hasIncomplete = isCognitoMode && Boolean(cognitoProgressView?.hasIncompleteAvailability);
 
               return (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
@@ -1244,15 +1194,19 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
                       <Target size={18} className="text-[#0F6F62]" />
                     </div>
                     <div className="flex items-baseline space-x-2">
-                      <span className="text-4xl font-extrabold text-[#1C2A39]">{dailyPct}%</span>
+                      <span className="text-4xl font-extrabold text-[#1C2A39]">
+                        {dailyPct !== null ? `${dailyPct}%` : 'N/D'}
+                      </span>
                       <span className="text-xs font-semibold text-[#455A64]">
-                        ({view?.completedTodaySessions ?? 0} de {view?.dailyLimit ?? 1} sesiones hoy)
+                        {view?.completedTodaySessions !== null && view?.completedTodaySessions !== undefined
+                          ? `(${view.completedTodaySessions} de ${view.dailyLimit ?? 1} sesiones hoy)`
+                          : 'Disponibilidad pendiente de verificación (CHECK_AT_START / cupos null)'}
                       </span>
                     </div>
                     {/* Accessible Progress Bar */}
                     <div
                       role="progressbar"
-                      aria-valuenow={dailyPct}
+                      aria-valuenow={dailyPct ?? 0}
                       aria-valuemin={0}
                       aria-valuemax={100}
                       aria-label="Porcentaje de meta diaria"
@@ -1260,7 +1214,7 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
                     >
                       <div
                         className="bg-[#0F6F62] h-full rounded-full transition-all duration-500"
-                        style={{ width: `${dailyPct}%` }}
+                        style={{ width: `${dailyPct ?? 0}%` }}
                       />
                     </div>
                   </div>
@@ -1276,21 +1230,25 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
                       <TrendingUp size={18} className="text-[#26A69A]" />
                     </div>
                     <div className="flex items-baseline space-x-2">
-                      <span className="text-4xl font-extrabold text-[#1C2A39]">{planPct}%</span>
+                      <span className="text-4xl font-extrabold text-[#1C2A39]">
+                        {planPct !== null ? `${planPct}%` : 'N/D'}
+                      </span>
                       <span className="text-xs font-semibold text-[#455A64]">
                         {isCognitoMode
-                          ? `${cognitoProgressView?.totalCompletedRunsToday ?? 0} / ${
-                              cognitoProgressView?.totalPrescribedRunsToday ?? 0
-                            } prescripciones hoy · ${
-                              cognitoProgressView?.remainingSlots ?? 0
-                            } cupo(s) libre(s)`
+                          ? planPct === null || hasIncomplete
+                            ? 'Disponibilidad pendiente de verificación (CHECK_AT_START / cupos null)'
+                            : `${cognitoProgressView?.totalCompletedRunsToday ?? 'N/D'} / ${
+                                cognitoProgressView?.totalPrescribedRunsToday ?? 0
+                              } prescripciones hoy · ${
+                                cognitoProgressView?.remainingSlots ?? 'Por verificar'
+                              } cupo(s) libre(s)`
                           : 'Rendimiento semanal demo'}
                       </span>
                     </div>
                     {/* Accessible Progress Bar */}
                     <div
                       role="progressbar"
-                      aria-valuenow={planPct}
+                      aria-valuenow={planPct ?? 0}
                       aria-valuemin={0}
                       aria-valuemax={100}
                       aria-label="Porcentaje de cumplimiento de cuota diaria"
@@ -1298,7 +1256,7 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
                     >
                       <div
                         className="bg-[#26A69A] h-full rounded-full transition-all duration-500"
-                        style={{ width: `${planPct}%` }}
+                        style={{ width: `${planPct ?? 0}%` }}
                       />
                     </div>
                   </div>
@@ -1353,6 +1311,17 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
                 </span>
               </div>
 
+              {/* Notice banner when availability is incomplete (CHECK_AT_START / null slots) */}
+              {isCognitoMode && cognitoProgressView?.hasIncompleteAvailability && (
+                <div className="bg-[#FFF8F0] border border-[#FFE2C2] text-[#B85D19] rounded-xl p-3.5 flex items-center gap-2.5 text-xs font-semibold">
+                  <AlertTriangle size={16} className="shrink-0 text-[#B85D19]" />
+                  <span>
+                    Disponibilidad pendiente de verificación (CHECK_AT_START / cupos null). Algunos
+                    cupos diarios se evaluarán al iniciar la sesión.
+                  </span>
+                </div>
+              )}
+
               {/* Items Grid / List */}
               <div className="space-y-4">
                 {(() => {
@@ -1369,14 +1338,29 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
                   }
 
                   return items.map((item) => {
-                    const runPct = Math.min(
-                      100,
-                      Math.round((item.completedRunsToday / (item.dailyTargetRuns || 1)) * 100)
-                    );
-                    const planPct = Math.min(
-                      100,
-                      Math.round((item.completedRunsInPlan / (item.totalPlannedRuns || 1)) * 100)
-                    );
+                    const cognitoItem = isCognitoMode ? (item as CognitoProgressItem) : null;
+                    const mockItem = !isCognitoMode ? (item as ProgressItem) : null;
+
+                    const runPct: number | null = cognitoItem
+                      ? cognitoItem.runCompletionPercentage
+                      : Math.min(
+                          100,
+                          Math.round(
+                            ((mockItem?.completedRunsToday ?? 0) /
+                              (mockItem?.dailyTargetRuns || 1)) *
+                              100
+                          )
+                        );
+                    const planPct: number | null = cognitoItem
+                      ? runPct
+                      : Math.min(
+                          100,
+                          Math.round(
+                            ((mockItem?.completedRunsInPlan ?? 0) /
+                              (mockItem?.totalPlannedRuns || 1)) *
+                              100
+                          )
+                        );
 
                     return (
                       <div
@@ -1409,7 +1393,9 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
                           <div className="text-xs font-semibold text-[#455A64] sm:text-right">
                             <span>Cupos restantes hoy: </span>
                             <strong className="text-[#1C2A39] font-bold text-sm">
-                              {item.remainingRunsToday}
+                              {item.remainingRunsToday === null
+                                ? 'Por verificar'
+                                : item.remainingRunsToday}
                             </strong>
                           </div>
                         </div>
@@ -1421,12 +1407,14 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
                             <div className="flex justify-between text-xs font-semibold">
                               <span className="text-[#455A64]">Rondas completadas hoy:</span>
                               <span className="text-[#1C2A39] font-bold">
-                                {item.completedRunsToday} / {item.dailyTargetRuns} ({runPct}%)
+                                {item.completedRunsToday === null ? 'N/D' : item.completedRunsToday} /{' '}
+                                {item.dailyTargetRuns ?? 'N/D'} (
+                                {runPct !== null ? `${runPct}%` : 'N/D'})
                               </span>
                             </div>
                             <div
                               role="progressbar"
-                              aria-valuenow={runPct}
+                              aria-valuenow={runPct ?? 0}
                               aria-valuemin={0}
                               aria-valuemax={100}
                               aria-label={`Rondas de hoy para ${item.exerciseTitle}`}
@@ -1434,7 +1422,7 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
                             >
                               <div
                                 className="bg-[#0F6F62] h-full rounded-full transition-all duration-300"
-                                style={{ width: `${runPct}%` }}
+                                style={{ width: `${runPct ?? 0}%` }}
                               />
                             </div>
                           </div>
@@ -1449,13 +1437,19 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
                               </span>
                               <span className="text-[#1C2A39] font-bold">
                                 {isCognitoMode
-                                  ? `${item.remainingRunsToday} libre(s) / ${item.dailyTargetRuns} pautado(s)`
-                                  : `${item.completedRunsInPlan} / ${item.totalPlannedRuns} (${planPct}%)`}
+                                  ? `${
+                                      item.remainingRunsToday === null
+                                        ? 'Por verificar'
+                                        : `${item.remainingRunsToday} libre(s)`
+                                    } / ${item.dailyTargetRuns ?? 'N/D'} pautado(s)`
+                                  : `${mockItem?.completedRunsInPlan ?? 0} / ${
+                                      mockItem?.totalPlannedRuns ?? 0
+                                    } (${planPct ?? 0}%)`}
                               </span>
                             </div>
                             <div
                               role="progressbar"
-                              aria-valuenow={planPct}
+                              aria-valuenow={planPct ?? 0}
                               aria-valuemin={0}
                               aria-valuemax={100}
                               aria-label={`Avance de cuota para ${item.exerciseTitle}`}
@@ -1463,7 +1457,7 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
                             >
                               <div
                                 className="bg-[#26A69A] h-full rounded-full transition-all duration-300"
-                                style={{ width: `${planPct}%` }}
+                                style={{ width: `${planPct ?? 0}%` }}
                               />
                             </div>
                           </div>
@@ -1667,8 +1661,9 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
                           <div className="text-xs text-[#455A64] font-semibold">
                             Fecha de cuota: {plan.dailyAvailability.quotaDate} · Cupos restantes hoy:{' '}
                             <span className="text-[#0F6F62] font-bold">
-                              {plan.dailyAvailability.remainingPlanSessionSlots ?? 'Sin límite'} /{' '}
-                              {plan.dailySessionLimit}
+                              {plan.dailyAvailability.remainingPlanSessionSlots === null
+                                ? `Por verificar (límite ${plan.dailySessionLimit})`
+                                : `${plan.dailyAvailability.remainingPlanSessionSlots} / ${plan.dailySessionLimit}`}
                             </span>
                           </div>
                         </div>

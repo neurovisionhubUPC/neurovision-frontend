@@ -56,12 +56,20 @@ import {
   type PatientSessionProgressResponse,
   type PatientTherapySessionResponse,
   type ReportMode,
-  type TelemetryGazeSampleBody,
-  type TelemetryGameplaySampleBody,
+  type AnalyticsDataOrigin,
   type TherapyCompletionTarget,
   type VisualScanningParameters,
   type VisualSearchParameters,
 } from '../../../../infrastructure/api';
+import {
+  GazeFreshnessGuard,
+  type GazeFreshnessReason,
+} from '../../../../infrastructure/therapy/gazeFreshnessGuard';
+import { TelemetryBatchQueue } from '../../../../infrastructure/telemetry/telemetryBatchQueue';
+import {
+  TrialAnalyticsQueue,
+  type TrialAnalyticsQueueSummary,
+} from '../../../../infrastructure/telemetry/trialAnalyticsQueue';
 import {
   Award,
   CheckCircle,
@@ -99,6 +107,10 @@ export interface EyeTrackingGameCanvasProps {
   activeSession?: PatientTherapySessionResponse | null;
   sessionProgress?: PatientSessionProgressResponse | null;
   gazeConfidenceRef?: React.MutableRefObject<number>;
+  gazeSampleSeqRef?: React.MutableRefObject<number>;
+  gazeLastValidPerfRef?: React.MutableRefObject<number>;
+  gazeIsBlinkingRef?: React.MutableRefObject<boolean>;
+  isWebcamStreaming?: boolean;
   mouseFallbackEnabled?: boolean;
   onToggleMouseFallback?: () => void;
   onSessionProgressUpdate?: (progress: PatientSessionProgressResponse) => void;
@@ -134,17 +146,32 @@ interface ModuleSessionSummary {
   maxStreak: number;
   inputOrigin: 'WEBCAM_GAZE' | 'MOUSE_FALLBACK' | 'MIXED';
   webcamSamplePercent: number;
+  reportedDataOrigin: 'PRODUCER_REPORTED' | 'SYNTHETIC' | 'MIXED';
 }
 
-interface PendingTelemetryBatch {
-  batchId: string;
-  therapySessionId: string;
-  streamId: string;
-  sequence: number;
-  capturedAt: string;
-  gazeSamples: TelemetryGazeSampleBody[];
-  gameplaySamples: TelemetryGameplaySampleBody[];
-  attempts: number;
+interface SyncSummaryState {
+  confirmedTrials: number;
+  pendingTrials: number;
+  uncertainTrials: number;
+  failedTrials: number;
+  pendingTelemetryBatches: number;
+}
+
+function getGazeWarningText(reason: GazeFreshnessReason): string | null {
+  switch (reason) {
+    case 'BLINKING':
+      return '👁️ Parpadeo detectado — fijación pausada';
+    case 'STALE_SAMPLE':
+      return '⚠️ Señal ocular detenida (>150ms) — reubíquese frente a la cámara';
+    case 'STREAM_STOPPED':
+      return '⚠️ Cámara detenida — reactívela para continuar';
+    case 'LOW_CONFIDENCE':
+      return '⚠️ Baja confianza ocular — mejore iluminación o postura';
+    case 'MOUSE_WAITING_INPUT':
+      return '🖱️ Mueva el puntero sobre el lienzo para iniciar';
+    default:
+      return null;
+  }
 }
 
 function clamp01(val: number): number {
@@ -267,6 +294,10 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   activeSession,
   sessionProgress,
   gazeConfidenceRef,
+  gazeSampleSeqRef,
+  gazeLastValidPerfRef,
+  gazeIsBlinkingRef,
+  isWebcamStreaming,
   mouseFallbackEnabled = false,
   onToggleMouseFallback,
   onSessionProgressUpdate,
@@ -307,9 +338,20 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   // Backend integration status (non-blocking UI feedback)
   const [backendWarning, setBackendWarning] = useState<string | null>(null);
   const [completionState, setCompletionState] = useState<
-    'IDLE' | 'SAVING' | 'FINISHED' | 'ABANDONED' | 'ERROR'
+    'IDLE' | 'SAVING' | 'PENDING_SYNC' | 'FINISHED' | 'ABANDONED' | 'ERROR'
   >('IDLE');
+  const completionStateRef = useRef(completionState);
+  useEffect(() => {
+    completionStateRef.current = completionState;
+  }, [completionState]);
   const [trialsSubmittedCount, setTrialsSubmittedCount] = useState(0);
+  const [syncSummary, setSyncSummary] = useState<SyncSummaryState>({
+    confirmedTrials: 0,
+    pendingTrials: 0,
+    uncertainTrials: 0,
+    failedTrials: 0,
+    pendingTelemetryBatches: 0,
+  });
 
   const resolvedMode: ReportMode =
     exerciseMode ||
@@ -353,8 +395,16 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   // Clinical lifecycle refs (strictly ordered & race-free)
   const nextSequenceRef = useRef<number>(sessionProgress?.nextSequence ?? 0);
   const eventQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const telemetryQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const analyticsQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const telemetryQueueManagerRef = useRef<TelemetryBatchQueue | null>(null);
+  const trialAnalyticsQueueRef = useRef<TrialAnalyticsQueue | null>(null);
+  const gazeFreshnessGuardRef = useRef(new GazeFreshnessGuard());
+  const hasMousePointerMovedRef = useRef<boolean>(false);
+  const fallbackSampleSeqRef = useRef<number>(0);
+  const trialUsedMouseFallbackRef = useRef<boolean>(mouseFallbackEnabled);
+  const sessionTrialOriginsRef = useRef<{ producerReported: number; synthetic: number }>({
+    producerReported: 0,
+    synthetic: 0,
+  });
   const isBootstrappedRef = useRef<boolean>(false);
   const isCompletingRef = useRef<boolean>(false);
   const latestProgressRef = useRef<PatientSessionProgressResponse | null>(
@@ -366,18 +416,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   const sessionHadCognitoRef = useRef<boolean>(false);
   const completionKeyRef = useRef<string>(createUuid());
 
-  const streamIdRef = useRef<string>(createUuid());
-  const telemetrySequenceRef = useRef<number>(0);
-  const gazeBufferRef = useRef<TelemetryGazeSampleBody[]>([]);
-  const gameplayBufferRef = useRef<TelemetryGameplaySampleBody[]>([]);
-  const pendingTelemetryBatchesRef = useRef<PendingTelemetryBatch[]>([]);
-  const batchCapturedAtRef = useRef<string | null>(null);
-  const batchBaseEpochMsRef = useRef<number>(0);
-  const batchStartPerfRef = useRef<number>(performance.now());
-  const lastEffectiveSampleEpochMsRef = useRef<number>(0);
   const sessionStartPerfRef = useRef<number>(performance.now());
-  const lastGazeOffsetMsRef = useRef<number>(-1);
-  const lastGameplayOffsetMsRef = useRef<number>(-1);
   const lastTelemetrySamplePerfRef = useRef<number>(0);
   const prevMouseFallbackRef = useRef<boolean>(mouseFallbackEnabled);
   const webcamGazeSamplesCountRef = useRef<number>(0);
@@ -390,9 +429,14 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
     }
   }, [sessionProgress]);
 
-  // Reset lifecycle refs when a new activeSessionId starts
+  // Reset lifecycle refs & initialize queues when activeSessionId changes
   useEffect(() => {
-    if (!activeSessionId) return;
+    if (!activeSessionId || !isCognitoSession) {
+      telemetryQueueManagerRef.current = null;
+      trialAnalyticsQueueRef.current = null;
+      if (!activeSessionId) return;
+    }
+
     nextSequenceRef.current = latestProgressRef.current?.nextSequence ?? 0;
     repetitionCounterRef.current = latestProgressRef.current?.completedRepetitions ?? 0;
     currentRepObjRef.current = null;
@@ -400,23 +444,70 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
     isBootstrappedRef.current = false;
     isCompletingRef.current = false;
     completionKeyRef.current = createUuid();
-    streamIdRef.current = createUuid();
-    telemetrySequenceRef.current = 0;
-    gazeBufferRef.current = [];
-    gameplayBufferRef.current = [];
-    pendingTelemetryBatchesRef.current = [];
-    batchCapturedAtRef.current = null;
-    batchBaseEpochMsRef.current = 0;
-    batchStartPerfRef.current = performance.now();
-    lastEffectiveSampleEpochMsRef.current = 0;
-    lastGazeOffsetMsRef.current = -1;
-    lastGameplayOffsetMsRef.current = -1;
     webcamGazeSamplesCountRef.current = 0;
     mouseFallbackSamplesCountRef.current = 0;
+    gazeFreshnessGuardRef.current.reset();
+    hasMousePointerMovedRef.current = false;
+    fallbackSampleSeqRef.current = 0;
+    trialUsedMouseFallbackRef.current = mouseFallbackEnabled;
+    sessionTrialOriginsRef.current = { producerReported: 0, synthetic: 0 };
     setCompletionState('IDLE');
     setBackendWarning(null);
     setTrialsSubmittedCount(0);
-  }, [activeSessionId]);
+    setSyncSummary({
+      confirmedTrials: 0,
+      pendingTrials: 0,
+      uncertainTrials: 0,
+      failedTrials: 0,
+      pendingTelemetryBatches: 0,
+    });
+
+    if (isCognitoSession && activeSessionId) {
+      telemetryQueueManagerRef.current = new TelemetryBatchQueue({
+        therapySessionId: activeSessionId,
+        sendBatch: (body) => telemetryApi.sendTelemetryBatch(body),
+        onStateChange: (snapshot) => {
+          if (!isMountedRef.current) return;
+          setSyncSummary((prev) => ({
+            ...prev,
+            pendingTelemetryBatches: snapshot.pendingCount,
+          }));
+          if (snapshot.lastWarning) {
+            setBackendWarning(snapshot.lastWarning);
+          } else {
+            setBackendWarning((prev) =>
+              prev && (prev.startsWith('Telemetry') || prev.startsWith('Telemetría'))
+                ? null
+                : prev
+            );
+          }
+        },
+      });
+
+      trialAnalyticsQueueRef.current = new TrialAnalyticsQueue({
+        sendTrial: (slug, body) => analyticsApi.submitTrialResult(activeSessionId, slug, body),
+        onStateChange: (summary: TrialAnalyticsQueueSummary) => {
+          if (!isMountedRef.current) return;
+          setTrialsSubmittedCount(summary.confirmedCount);
+          setSyncSummary((prev) => ({
+            ...prev,
+            confirmedTrials: summary.confirmedCount,
+            pendingTrials: summary.pendingCount,
+            uncertainTrials: summary.uncertainCount,
+            failedTrials: summary.failedPermanentCount,
+          }));
+          if (summary.failedPermanentCount > 0) {
+            const lastFailed = [...summary.entries]
+              .reverse()
+              .find((e) => e.status === 'FAILED_PERMANENT');
+            if (lastFailed?.lastError) {
+              setBackendWarning(`Analítica ensayo: ${lastFailed.lastError}`);
+            }
+          }
+        },
+      });
+    }
+  }, [activeSessionId, isCognitoSession, mouseFallbackEnabled]);
 
   const enqueueActivityEvent = useCallback(
     (buildEvent: (seq: number) => PatientActivityEventBody): Promise<void> => {
@@ -425,7 +516,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       }
 
       eventQueueRef.current = eventQueueRef.current.then(async () => {
-        if (isCompletingRef.current) return;
+        if (isCompletingRef.current && completionStateRef.current !== 'PENDING_SYNC') return;
         const seq = nextSequenceRef.current;
         const payload = buildEvent(seq);
         try {
@@ -549,147 +640,22 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   );
 
   const flushTelemetryBuffer = useCallback((): Promise<void> => {
-    if (!isCognitoSession || !activeSessionId) {
-      gazeBufferRef.current = [];
-      gameplayBufferRef.current = [];
-      batchCapturedAtRef.current = null;
-      lastGazeOffsetMsRef.current = -1;
-      lastGameplayOffsetMsRef.current = -1;
+    if (!isCognitoSession || !activeSessionId || !telemetryQueueManagerRef.current) {
       return Promise.resolve();
     }
-
-    if (gazeBufferRef.current.length > 0 || gameplayBufferRef.current.length > 0) {
-      const gazeSnapshot = gazeBufferRef.current;
-      const gameplaySnapshot = gameplayBufferRef.current;
-      const fallbackWallMs = Math.max(
-        Date.now(),
-        lastEffectiveSampleEpochMsRef.current + 1
-      );
-      const capturedAt =
-        batchCapturedAtRef.current || new Date(fallbackWallMs).toISOString();
-
-      gazeBufferRef.current = [];
-      gameplayBufferRef.current = [];
-      batchCapturedAtRef.current = null;
-      lastGazeOffsetMsRef.current = -1;
-      lastGameplayOffsetMsRef.current = -1;
-
-      let gIdx = 0;
-      let pIdx = 0;
-      const currentStreamId = streamIdRef.current;
-
-      while (gIdx < gazeSnapshot.length || pIdx < gameplaySnapshot.length) {
-        const gazeChunk = gazeSnapshot.slice(gIdx, gIdx + 500);
-        const gameplayChunk = gameplaySnapshot.slice(pIdx, pIdx + 500);
-        gIdx += gazeChunk.length;
-        pIdx += gameplayChunk.length;
-
-        if (gazeChunk.length === 0 && gameplayChunk.length === 0) {
-          break;
-        }
-
-        const seq = telemetrySequenceRef.current;
-        telemetrySequenceRef.current += 1;
-
-        pendingTelemetryBatchesRef.current.push({
-          batchId: createUuid(),
-          therapySessionId: activeSessionId,
-          streamId: currentStreamId,
-          sequence: seq,
-          capturedAt,
-          gazeSamples: gazeChunk,
-          gameplaySamples: gameplayChunk,
-          attempts: 0,
-        });
-      }
-
-      if (pendingTelemetryBatchesRef.current.length > 60) {
-        pendingTelemetryBatchesRef.current.splice(
-          0,
-          pendingTelemetryBatchesRef.current.length - 60
-        );
-      }
-    }
-
-    if (pendingTelemetryBatchesRef.current.length === 0) {
-      return telemetryQueueRef.current;
-    }
-
-    telemetryQueueRef.current = telemetryQueueRef.current.then(async () => {
-      while (pendingTelemetryBatchesRef.current.length > 0) {
-        const batch = pendingTelemetryBatchesRef.current[0];
-        let processed = false;
-
-        for (let tryIdx = 0; tryIdx < 2; tryIdx++) {
-          batch.attempts += 1;
-          try {
-            await telemetryApi.sendTelemetryBatch({
-              schemaVersion: 1,
-              batchId: batch.batchId,
-              therapySessionId: batch.therapySessionId,
-              streamId: batch.streamId,
-              sequence: batch.sequence,
-              capturedAt: batch.capturedAt,
-              sentAt: new Date().toISOString(),
-              gazeSamples: batch.gazeSamples,
-              gameplaySamples: batch.gameplaySamples,
-            });
-            pendingTelemetryBatchesRef.current.shift();
-            processed = true;
-            if (isMountedRef.current) {
-              setBackendWarning((prev) =>
-                prev && prev.startsWith('Telemetría en búfer') ? null : prev
-              );
-            }
-            break;
-          } catch (err) {
-            const isPermanentClientRejection =
-              err instanceof ApiError &&
-              (err.status === 400 || err.status === 401 || err.status === 403);
-            if (isPermanentClientRejection) {
-              pendingTelemetryBatchesRef.current.shift();
-              processed = true;
-              if (isMountedRef.current) {
-                setBackendWarning(
-                  `Lote de telemetría rechazado: ${extractApiErrorMessage(err)}`
-                );
-              }
-              break;
-            }
-
-            if (tryIdx === 0) {
-              await new Promise((resolve) => window.setTimeout(resolve, 350));
-            } else if (isMountedRef.current) {
-              setBackendWarning(
-                `Telemetría en búfer (${pendingTelemetryBatchesRef.current.length} lotes pendientes: ${extractApiErrorMessage(err)})`
-              );
-            }
-          }
-        }
-
-        if (!processed) {
-          // Keep batch at head of queue so next interval or finishSession retries in sequence order
-          break;
-        }
-      }
-    });
-
-    return telemetryQueueRef.current;
+    return telemetryQueueManagerRef.current.flush().then(() => undefined);
   }, [isCognitoSession, activeSessionId]);
 
   // Isolate telemetry streamId when switching input origin between Webcam Gaze and Mouse Fallback
   useEffect(() => {
     if (prevMouseFallbackRef.current !== localMouseFallback) {
       prevMouseFallbackRef.current = localMouseFallback;
-      void flushTelemetryBuffer().then(() => {
-        streamIdRef.current = createUuid();
-        telemetrySequenceRef.current = 0;
-        batchCapturedAtRef.current = null;
-        lastGazeOffsetMsRef.current = -1;
-        lastGameplayOffsetMsRef.current = -1;
-      });
+      void telemetryQueueManagerRef.current?.rotateStream();
     }
-  }, [localMouseFallback, flushTelemetryBuffer]);
+    if (localMouseFallback && gamePhase === 'MAIN_GAME') {
+      trialUsedMouseFallbackRef.current = true;
+    }
+  }, [localMouseFallback, gamePhase]);
 
   const [isMuted, setIsMuted] = useState<boolean>(() => therapyAudio.isMuted());
   const [moduleSummary, setModuleSummary] = useState<ModuleSessionSummary>({
@@ -703,6 +669,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
     maxStreak: 0,
     inputOrigin: mouseFallbackEnabled ? 'MOUSE_FALLBACK' : 'WEBCAM_GAZE',
     webcamSamplePercent: mouseFallbackEnabled ? 0 : 100,
+    reportedDataOrigin: mouseFallbackEnabled ? 'SYNTHETIC' : 'PRODUCER_REPORTED',
   });
 
   const handleToggleMute = useCallback(() => {
@@ -713,52 +680,21 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
     });
   }, []);
 
+  const recordSubmittedTrialOrigin = useCallback((origin: AnalyticsDataOrigin) => {
+    if (origin === 'SYNTHETIC') {
+      sessionTrialOriginsRef.current.synthetic += 1;
+    } else {
+      sessionTrialOriginsRef.current.producerReported += 1;
+    }
+  }, []);
+
   const submitTrialAnalytics = useCallback(
     (body: AnyTrialBody): Promise<void> => {
-      if (!isCognitoSession || !activeSessionId) {
+      if (!isCognitoSession || !activeSessionId || !trialAnalyticsQueueRef.current) {
         return Promise.resolve();
       }
-      try {
-        const serializedSize = JSON.stringify(body).length;
-        if (serializedSize >= 8192) {
-          return Promise.resolve();
-        }
-      } catch {
-        return Promise.resolve();
-      }
-
       const slug = modeToAnalyticsSlug(resolvedMode);
-      const sendAttempt = async (isRetry: boolean) => {
-        try {
-          await analyticsApi.submitTrialResult(activeSessionId, slug, body);
-          if (isMountedRef.current) {
-            setTrialsSubmittedCount((c) => c + 1);
-          }
-        } catch (err) {
-          const isRetryable =
-            !isRetry &&
-            (!(err instanceof ApiError) ||
-              err.status === 503 ||
-              err.status === 502 ||
-              err.status === 504 ||
-              err.status === 429 ||
-              err.status === 0);
-          if (isRetryable) {
-            // Contract rule: on 503 WRITE_OUTCOME_UNKNOWN or transient network error, replay the exact same trialId & body once
-            await new Promise((resolve) => window.setTimeout(resolve, 300));
-            await sendAttempt(true);
-            return;
-          }
-          if (isMountedRef.current) {
-            setBackendWarning(`Analítica ensayo: ${extractApiErrorMessage(err)}`);
-          }
-        }
-      };
-
-      analyticsQueueRef.current = analyticsQueueRef.current.then(() =>
-        sendAttempt(false)
-      );
-      return analyticsQueueRef.current;
+      return trialAnalyticsQueueRef.current.submit(slug, body).then(() => undefined);
     },
     [isCognitoSession, activeSessionId, resolvedMode]
   );
@@ -847,80 +783,136 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
     []
   );
 
-  const buildInterruptedTrialBody = useCallback((): AnyTrialBody => {
+  const buildInterruptedTrialBody = useCallback((): AnyTrialBody | null => {
     const s = gameState.current;
+    const trialOrigin: AnalyticsDataOrigin = trialUsedMouseFallbackRef.current
+      ? 'SYNTHETIC'
+      : 'PRODUCER_REPORTED';
 
     switch (resolvedMode) {
-      case 'TARGET_SEARCH_WITH_DISTRACTORS':
+      case 'TARGET_SEARCH_WITH_DISTRACTORS': {
+        if (s.searchState?.completed) return null;
         if (s.searchState) {
-          return interruptVisualSearchTrial(s.searchState, frozenParams as VisualSearchParameters);
+          return interruptVisualSearchTrial(
+            s.searchState,
+            frozenParams as VisualSearchParameters,
+            trialOrigin
+          );
         }
+        const maxMs = Math.round((frozenParams as VisualSearchParameters).maximumSearchTimeMs);
         return {
           schemaVersion: 1,
           trialId: s.trialId,
-          dataOrigin: 'PRODUCER_REPORTED',
+          dataOrigin: trialOrigin,
           outcome: 'INTERRUPTED',
           confirmedDwellMs: null,
-          searchDurationMs: Math.max(0, Math.round(s.trialElapsedMs)),
+          searchDurationMs: Math.min(
+            Math.max(0, maxMs - 1),
+            Math.max(0, Math.round(s.trialElapsedMs))
+          ),
         };
-      case 'STANDARD_SCANNING':
+      }
+      case 'STANDARD_SCANNING': {
+        if (s.standardState?.completed) return null;
         if (s.standardState) {
           return interruptStandardScanningTrial(
             s.standardState,
-            frozenParams as VisualScanningParameters
+            frozenParams as VisualScanningParameters,
+            trialOrigin
           );
         }
+        const maxMs = Math.round(
+          (frozenParams as VisualScanningParameters).maximumStimulusDurationMs
+        );
         return {
           schemaVersion: 1,
           trialId: s.trialId,
-          dataOrigin: 'PRODUCER_REPORTED',
+          dataOrigin: trialOrigin,
           outcome: 'INTERRUPTED',
           confirmedDwellMs: null,
-          localizationDurationMs: Math.max(0, Math.round(s.trialElapsedMs)),
+          localizationDurationMs: Math.min(
+            Math.max(0, maxMs - 1),
+            Math.max(0, Math.round(s.trialElapsedMs))
+          ),
         };
-      case 'COMPENSATORY_SACCADE':
+      }
+      case 'COMPENSATORY_SACCADE': {
+        if (s.saccadeState?.completed) return null;
         if (s.saccadeState) {
           return interruptCompensatorySaccadeTrial(
             s.saccadeState,
-            frozenParams as VisualScanningParameters
+            frozenParams as VisualScanningParameters,
+            trialOrigin
           );
         }
+        const maxMs = Math.round(
+          (frozenParams as VisualScanningParameters).maximumStimulusDurationMs
+        );
         return {
           schemaVersion: 1,
           trialId: s.trialId,
-          dataOrigin: 'PRODUCER_REPORTED',
+          dataOrigin: trialOrigin,
           outcome: 'INTERRUPTED',
           confirmedDwellMs: null,
-          elapsedMs: Math.max(0, Math.round(s.trialElapsedMs)),
+          elapsedMs: Math.min(
+            Math.max(0, maxMs - 1),
+            Math.max(0, Math.round(s.trialElapsedMs))
+          ),
         };
-      case 'SUSTAINED_TARGET_FIXATION':
+      }
+      case 'SUSTAINED_TARGET_FIXATION': {
+        if (s.fixationState?.completed) return null;
         if (s.fixationState) {
-          return interruptSustainedFixationTrial(s.fixationState, frozenParams as FixationParameters);
+          return interruptSustainedFixationTrial(
+            s.fixationState,
+            frozenParams as FixationParameters,
+            trialOrigin
+          );
         }
+        const maxMs = Math.round((frozenParams as FixationParameters).maximumFixationMs);
+        const elapsedMs = Math.min(
+          Math.max(1, maxMs - 1),
+          Math.max(1, Math.round(s.trialElapsedMs))
+        );
+        const insideTargetMs = Math.min(elapsedMs, Math.max(0, Math.round(s.insideTargetMs)));
+        const longestContinuousInsideMs = Math.min(
+          insideTargetMs,
+          Math.max(0, Math.round(s.longestContinuousInsideMs))
+        );
         return {
           schemaVersion: 1,
           trialId: s.trialId,
-          dataOrigin: 'PRODUCER_REPORTED',
+          dataOrigin: trialOrigin,
           outcome: 'INTERRUPTED',
-          elapsedMs: Math.max(1, Math.round(s.trialElapsedMs)),
-          insideTargetMs: Math.max(0, Math.round(s.insideTargetMs)),
-          longestContinuousInsideMs: Math.max(0, Math.round(s.longestContinuousInsideMs)),
+          elapsedMs,
+          insideTargetMs,
+          longestContinuousInsideMs,
         };
-      case 'SYSTEMATIC_EXPLORATION':
+      }
+      case 'SYSTEMATIC_EXPLORATION': {
+        if (s.explorationState?.completed) return null;
         if (s.explorationState) {
           return interruptSystematicExplorationTrial(
             s.explorationState,
-            frozenParams as VisualScanningParameters
+            frozenParams as VisualScanningParameters,
+            trialOrigin
           );
         }
+        const maxMs = Math.round(
+          (frozenParams as VisualScanningParameters).maximumStimulusDurationMs
+        );
         return {
           schemaVersion: 1,
           trialId: s.trialId,
-          dataOrigin: 'PRODUCER_REPORTED',
+          dataOrigin: trialOrigin,
           outcome: 'INTERRUPTED',
-          elapsedMs: Math.max(0, Math.round(s.trialElapsedMs)),
+          elapsedMs: Math.min(
+            Math.max(0, maxMs - 1),
+            Math.max(0, Math.round(s.trialElapsedMs))
+          ),
           visits: s.explorationVisits,
         };
+      }
     }
   }, [resolvedMode, frozenParams]);
 
@@ -928,6 +920,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
     (emitRepetitionStart: boolean) => {
       const s = gameState.current;
       const trialIdx = s.completedTrials;
+      trialUsedMouseFallbackRef.current = localMouseFallback;
 
       s.trialElapsedMs = 0;
       s.explorationStepIndex = 0;
@@ -1013,7 +1006,16 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         });
       }
     },
-    [frozenParams, resolvedMode, width, height, isCognitoSession, activeSessionId, enqueueActivityEvent]
+    [
+      frozenParams,
+      resolvedMode,
+      width,
+      height,
+      isCognitoSession,
+      activeSessionId,
+      enqueueActivityEvent,
+      localMouseFallback,
+    ]
   );
 
   const computeCurrentModuleSummary = useCallback((): ModuleSessionSummary => {
@@ -1050,6 +1052,14 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         ? 0
         : 100;
 
+    const { producerReported, synthetic } = sessionTrialOriginsRef.current;
+    const reportedDataOrigin: 'PRODUCER_REPORTED' | 'SYNTHETIC' | 'MIXED' =
+      producerReported > 0 && synthetic > 0
+        ? 'MIXED'
+        : synthetic > 0 || localMouseFallback
+        ? 'SYNTHETIC'
+        : 'PRODUCER_REPORTED';
+
     return {
       successfulTrials: s.score,
       timedOutTrials: s.timedOutTrials,
@@ -1061,46 +1071,51 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       maxStreak: s.maxStreak,
       inputOrigin,
       webcamSamplePercent,
+      reportedDataOrigin,
     };
   }, [localMouseFallback]);
 
-  const finishSession = useCallback(
-    async (reason: 'TARGET_REACHED' | 'USER_EXIT') => {
-      if (isCompletingRef.current) return;
-      isCompletingRef.current = true;
-      therapyAudio.playSessionCompleted();
+  const runCloseSessionFlow = useCallback(
+    async (forceCloseWithoutSync: boolean) => {
+      if (!isCognitoSession || !activeSessionId) return;
 
-      const finalReport = generateClinicalReport(
-        trajectoryRef.current,
-        width,
-        height,
-        40 / Math.hypot(width, height)
-      );
-      setReport(finalReport);
-      setModuleSummary(computeCurrentModuleSummary());
-      onPhaseChange('FINISHED');
-
-      if (!isCognitoSession || !activeSessionId) {
-        setCompletionState(reason === 'TARGET_REACHED' ? 'FINISHED' : 'ABANDONED');
-        return;
-      }
-
-      setCompletionState('SAVING');
-
-      // If exiting mid-trial, submit interrupted trial analytics without inflating REPETITION_FINISHED
-      if (reason === 'USER_EXIT' && gameState.current.subPhase !== 'INTER_STIMULUS_REST') {
-        if (gameState.current.trialElapsedMs > 150) {
-          void submitTrialAnalytics(buildInterruptedTrialBody());
-        }
+      if (isMountedRef.current) {
+        setCompletionState('SAVING');
       }
 
       // Wait for all in-flight trial results, ordered activity events & remaining telemetry samples
       // BEFORE closing the clinical session (analytics requires a live ACTIVE clinical session!)
       await Promise.all([
-        analyticsQueueRef.current.catch(() => undefined),
         eventQueueRef.current.catch(() => undefined),
-        flushTelemetryBuffer().catch(() => undefined),
+        trialAnalyticsQueueRef.current?.drainPending(2).catch(() => undefined),
+        telemetryQueueManagerRef.current?.flush().catch(() => undefined),
       ]);
+
+      const trialSummary = trialAnalyticsQueueRef.current?.getSummary();
+      const telemetrySnap = telemetryQueueManagerRef.current?.getSnapshot();
+
+      if (isMountedRef.current) {
+        setSyncSummary({
+          confirmedTrials: trialSummary?.confirmedCount ?? 0,
+          pendingTrials: trialSummary?.pendingCount ?? 0,
+          uncertainTrials: trialSummary?.uncertainCount ?? 0,
+          failedTrials: trialSummary?.failedPermanentCount ?? 0,
+          pendingTelemetryBatches: telemetrySnap?.pendingCount ?? 0,
+        });
+      }
+
+      if (
+        !forceCloseWithoutSync &&
+        ((trialSummary?.hasUnresolved ?? false) || (telemetrySnap?.pendingCount ?? 0) > 0)
+      ) {
+        if (isMountedRef.current) {
+          setCompletionState('PENDING_SYNC');
+          setBackendWarning(
+            'Hay ensayos o lotes de telemetría pendientes de sincronización antes de cerrar la sesión clínica.'
+          );
+        }
+        return;
+      }
 
       let latestProg = latestProgressRef.current;
       try {
@@ -1141,9 +1156,45 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         if (isMountedRef.current) {
           setCompletionState('ERROR');
           setBackendWarning(`Cierre de sesión: ${extractApiErrorMessage(err)}`);
-          onSessionCompleted?.(latestProg, action);
         }
       }
+    },
+    [isCognitoSession, activeSessionId, onSessionProgressUpdate, onSessionCompleted]
+  );
+
+  const finishSession = useCallback(
+    async (reason: 'TARGET_REACHED' | 'USER_EXIT') => {
+      if (isCompletingRef.current) return;
+      isCompletingRef.current = true;
+      therapyAudio.playSessionCompleted();
+
+      const finalReport = generateClinicalReport(
+        trajectoryRef.current,
+        width,
+        height,
+        40 / Math.hypot(width, height)
+      );
+      setReport(finalReport);
+      setModuleSummary(computeCurrentModuleSummary());
+      onPhaseChange('FINISHED');
+
+      if (!isCognitoSession || !activeSessionId) {
+        setCompletionState(reason === 'TARGET_REACHED' ? 'FINISHED' : 'ABANDONED');
+        return;
+      }
+
+      // If exiting mid-trial, submit interrupted trial analytics without inflating REPETITION_FINISHED
+      if (reason === 'USER_EXIT' && gameState.current.subPhase !== 'INTER_STIMULUS_REST') {
+        if (gameState.current.trialElapsedMs > 150) {
+          const interruptedBody = buildInterruptedTrialBody();
+          if (interruptedBody) {
+            recordSubmittedTrialOrigin(interruptedBody.dataOrigin);
+            void submitTrialAnalytics(interruptedBody);
+          }
+        }
+      }
+
+      await runCloseSessionFlow(false);
     },
     [
       width,
@@ -1153,9 +1204,8 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       activeSessionId,
       submitTrialAnalytics,
       buildInterruptedTrialBody,
-      flushTelemetryBuffer,
-      onSessionProgressUpdate,
-      onSessionCompleted,
+      recordSubmittedTrialOrigin,
+      runCloseSessionFlow,
       computeCurrentModuleSummary,
     ]
   );
@@ -1213,7 +1263,8 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       }
 
       if (isCognitoSession && activeSessionId) {
-        submitTrialAnalytics(trialBody);
+        recordSubmittedTrialOrigin(trialBody.dataOrigin);
+        void submitTrialAnalytics(trialBody);
 
         if (currentRepObjRef.current) {
           const repObj = currentRepObjRef.current;
@@ -1281,6 +1332,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       width,
       height,
       spawnRewardBurst,
+      recordSubmittedTrialOrigin,
     ]
   );
 
@@ -1320,6 +1372,8 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       gameState.current.maxSessionContinuousFixationMs = 0;
       gameState.current.activeElapsedMs = 0;
       trajectoryRef.current = [];
+      gazeFreshnessGuardRef.current.reset();
+      hasMousePointerMovedRef.current = false;
       setReport(null);
       setIsPaused(false);
       spawnTutorialTarget();
@@ -1334,6 +1388,9 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       gameState.current.quadrantTrialsCount = 0;
       gameState.current.maxSessionContinuousFixationMs = 0;
       trajectoryRef.current = [];
+      gazeFreshnessGuardRef.current.reset();
+      hasMousePointerMovedRef.current = false;
+      trialUsedMouseFallbackRef.current = prevMouseFallbackRef.current;
       setReport(null);
       setIsPaused(false);
       isCompletingRef.current = false;
@@ -1471,13 +1528,23 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   ]);
 
   // 5000ms HEARTBEAT & 2000ms Telemetry Batching Intervals
+  // Keep HEARTBEAT active during PENDING_SYNC so the 120s Clinical lease does not expire while waiting for sync retry.
   useEffect(() => {
-    if (gamePhase !== 'MAIN_GAME' || !isCognitoSession || !activeSessionId) {
+    const keepHeartbeatAlive =
+      (gamePhase === 'MAIN_GAME' || completionState === 'PENDING_SYNC') &&
+      isCognitoSession &&
+      Boolean(activeSessionId);
+    if (!keepHeartbeatAlive || !activeSessionId) {
       return;
     }
 
     const heartbeatTimer = window.setInterval(() => {
-      if (isPausedRef.current || isCompletingRef.current) return;
+      if (
+        isPausedRef.current ||
+        (isCompletingRef.current && completionStateRef.current !== 'PENDING_SYNC')
+      ) {
+        return;
+      }
       void enqueueActivityEvent((seq) => ({
         schemaVersion: 1,
         eventId: createUuid(),
@@ -1486,17 +1553,23 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       }));
     }, 5000);
 
-    const telemetryTimer = window.setInterval(() => {
-      void flushTelemetryBuffer();
-    }, 2000);
+    const telemetryTimer =
+      gamePhase === 'MAIN_GAME'
+        ? window.setInterval(() => {
+            void flushTelemetryBuffer();
+          }, 2000)
+        : null;
 
     return () => {
       window.clearInterval(heartbeatTimer);
-      window.clearInterval(telemetryTimer);
-      void flushTelemetryBuffer();
+      if (telemetryTimer !== null) {
+        window.clearInterval(telemetryTimer);
+        void flushTelemetryBuffer();
+      }
     };
   }, [
     gamePhase,
+    completionState,
     isCognitoSession,
     activeSessionId,
     enqueueActivityEvent,
@@ -1559,6 +1632,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
     const rect = canvas.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
 
+    hasMousePointerMovedRef.current = true;
     const nx = clamp01((e.clientX - rect.left) / rect.width);
     const ny = clamp01((e.clientY - rect.top) / rect.height);
     mousePointRef.current = { x: nx, y: ny };
@@ -1614,9 +1688,38 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       const rawGazeConfidence = gazeConfidenceRef
         ? clamp01(gazeConfidenceRef.current)
         : 0.85;
-      const isGazeSignalAvailable = localMouseFallback
-        ? true
-        : rawGazeConfidence >= 0.35;
+      const nowPerfMs = performance.now();
+      if (localMouseFallback && gamePhase === 'MAIN_GAME') {
+        trialUsedMouseFallbackRef.current = true;
+      }
+      const trialOrigin: AnalyticsDataOrigin = trialUsedMouseFallbackRef.current
+        ? 'SYNTHETIC'
+        : 'PRODUCER_REPORTED';
+
+      const currentSampleSeq = gazeSampleSeqRef
+        ? gazeSampleSeqRef.current
+        : rawGazeConfidence >= 0.35
+        ? ++fallbackSampleSeqRef.current
+        : 0;
+      const currentLastValidPerfMs = gazeLastValidPerfRef
+        ? gazeLastValidPerfRef.current
+        : rawGazeConfidence >= 0.35
+        ? nowPerfMs
+        : 0;
+
+      const guardEval = gazeFreshnessGuardRef.current.evaluateFrame({
+        nowPerfMs,
+        deltaTimeMs: deltaTime,
+        isMouseFallback: localMouseFallback,
+        hasMousePointerMoved: hasMousePointerMovedRef.current,
+        isWebcamStreaming: isWebcamStreaming ?? true,
+        confidence: rawGazeConfidence,
+        lastValidSamplePerfMs: currentLastValidPerfMs,
+        sampleSeq: currentSampleSeq,
+        isBlinking: gazeIsBlinkingRef?.current ?? false,
+      });
+
+      const isGazeSignalAvailable = guardEval.isSignalFresh;
       const currentConf = localMouseFallback ? 0.95 : rawGazeConfidence;
 
       const s = gameState.current;
@@ -1642,12 +1745,12 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
           const minFix = Math.max(300, prescription.parameters.min_fixation_time || 800);
 
           if (isHovering && !isPausedRef.current) {
-            tutTarget.dwellTimeMs += deltaTime;
+            tutTarget.dwellTimeMs += guardEval.effectiveDwellDeltaMs;
             if (tutTarget.dwellTimeMs >= minFix) {
               s.calibrationIndex += 1;
               spawnTutorialTarget();
             }
-          } else {
+          } else if (!isHovering || guardEval.shouldDecayDwell) {
             tutTarget.dwellTimeMs = Math.max(0, tutTarget.dwellTimeMs - deltaTime * 2);
           }
 
@@ -1681,14 +1784,13 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
             20,
             36
           );
-          if (!localMouseFallback && !isGazeSignalAvailable) {
+          if (!isGazeSignalAvailable) {
+            const tutWarning =
+              getGazeWarningText(guardEval.reason) ??
+              '⚠️ Rostro o mirada no detectada — reubíquese frente a la cámara';
             ctx.font = 'bold 14px Inter, sans-serif';
             ctx.fillStyle = '#FACC15';
-            ctx.fillText(
-              '⚠️ Rostro o mirada no detectada — reubíquese frente a la cámara',
-              20,
-              62
-            );
+            ctx.fillText(tutWarning, 20, 62);
           }
         }
       }
@@ -1729,56 +1831,10 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
           if (
             isCognitoSession &&
             activeSessionId &&
+            telemetryQueueManagerRef.current &&
             perfNow - lastTelemetrySamplePerfRef.current >= 32
           ) {
             lastTelemetrySamplePerfRef.current = perfNow;
-            if (!batchCapturedAtRef.current) {
-              const nowWallMs = Math.max(
-                Date.now(),
-                lastEffectiveSampleEpochMsRef.current + 1
-              );
-              batchBaseEpochMsRef.current = nowWallMs;
-              batchCapturedAtRef.current = new Date(nowWallMs).toISOString();
-              batchStartPerfRef.current = perfNow;
-              lastGazeOffsetMsRef.current = -1;
-              lastGameplayOffsetMsRef.current = -1;
-            }
-
-            const rawOffset = Math.max(
-              0,
-              Math.round(perfNow - batchStartPerfRef.current)
-            );
-            const gameplayOffset = Math.max(
-              lastGameplayOffsetMsRef.current + 1,
-              rawOffset
-            );
-            lastGameplayOffsetMsRef.current = gameplayOffset;
-            let maxBatchOffset = gameplayOffset;
-
-            // Only emit ocular gazeSamples when genuine webcam gaze tracking is active and valid.
-            // In mouse fallback or during transient face/blink loss, gazeSamples remains []
-            // while gameplaySamples records the player state (`telemetry/integration.md` line 18).
-            if (!localMouseFallback && isGazeSignalAvailable) {
-              const gazeOffset = Math.max(
-                lastGazeOffsetMsRef.current + 1,
-                rawOffset
-              );
-              lastGazeOffsetMsRef.current = gazeOffset;
-              maxBatchOffset = Math.max(maxBatchOffset, gazeOffset);
-
-              gazeBufferRef.current.push({
-                offsetMs: gazeOffset,
-                x: normGazeX,
-                y: normGazeY,
-                confidence: rawGazeConfidence,
-              });
-            }
-
-            lastEffectiveSampleEpochMsRef.current = Math.max(
-              lastEffectiveSampleEpochMsRef.current,
-              batchBaseEpochMsRef.current + maxBatchOffset
-            );
-
             const progressNorm =
               requiredReps !== null
                 ? clamp01(s.score / requiredReps)
@@ -1786,16 +1842,31 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                 ? clamp01(s.activeElapsedMs / (timeTargetSeconds * 1000))
                 : 0;
 
-            gameplayBufferRef.current.push({
-              offsetMs: gameplayOffset,
-              playerX: normGazeX,
-              playerY: normGazeY,
-              targetX: clamp01(primaryEntity.x / width),
-              targetY: clamp01(primaryEntity.y / height),
-              score: Math.max(0, s.score),
-              speed: Math.max(0, Number(s.cursorSpeedPxPerSec.toFixed(2))),
-              progress: progressNorm,
+            // Only emit ocular gazeSamples when genuine webcam gaze tracking is active and fresh.
+            // In mouse fallback or during transient face/blink/stale loss, gazeSamples remains []
+            // while gameplaySamples records the player state (`telemetry/integration.md` line 18).
+            const emitGaze = guardEval.isNewSampleForTelemetry;
+            telemetryQueueManagerRef.current.recordSample({
+              gaze: emitGaze
+                ? {
+                    x: normGazeX,
+                    y: normGazeY,
+                    confidence: rawGazeConfidence,
+                  }
+                : null,
+              gameplay: {
+                playerX: normGazeX,
+                playerY: normGazeY,
+                targetX: clamp01(primaryEntity.x / width),
+                targetY: clamp01(primaryEntity.y / height),
+                score: Math.max(0, s.score),
+                speed: Math.max(0, Number(s.cursorSpeedPxPerSec.toFixed(2))),
+                progress: progressNorm,
+              },
             });
+            if (emitGaze) {
+              gazeFreshnessGuardRef.current.markTelemetrySampleEmitted(currentSampleSeq);
+            }
           }
         }
 
@@ -1832,7 +1903,9 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               cursorPt,
               deltaTime,
               p,
-              isGazeSignalAvailable
+              isGazeSignalAvailable,
+              guardEval.effectiveDwellDeltaMs,
+              trialOrigin
             );
             s.entities = [s.standardState.target];
             if (s.standardState.target.dwellTimeMs > 60) {
@@ -1852,7 +1925,9 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               cursorPt,
               deltaTime,
               p,
-              isGazeSignalAvailable
+              isGazeSignalAvailable,
+              guardEval.effectiveDwellDeltaMs,
+              trialOrigin
             );
             if (s.explorationState.currentStepIndex > prevStep && !res) {
               const completedWp =
@@ -1888,7 +1963,9 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               cursorPt,
               deltaTime,
               p,
-              isGazeSignalAvailable
+              isGazeSignalAvailable,
+              guardEval.effectiveDwellDeltaMs,
+              trialOrigin
             );
             if (s.saccadeState.phase === 'CENTRAL_ANCHOR') {
               s.subPhase = 'CENTRAL_ANCHOR';
@@ -1930,7 +2007,9 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               cursorPt,
               deltaTime,
               p,
-              isGazeSignalAvailable
+              isGazeSignalAvailable,
+              guardEval.effectiveDwellDeltaMs,
+              trialOrigin
             );
             const foundTargetsNow = s.searchState.entities.filter(
               (e) => e.kind === 'TARGET' && e.found
@@ -1969,7 +2048,9 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               cursorPt,
               deltaTime,
               p,
-              isGazeSignalAvailable
+              isGazeSignalAvailable,
+              guardEval.effectiveDwellDeltaMs,
+              trialOrigin
             );
             s.insideTargetMs = s.fixationState.insideTargetMs;
             s.currentContinuousInsideMs = s.fixationState.currentContinuousInsideMs;
@@ -2278,14 +2359,13 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
           : `Origen: MIRADA WEBCAM (conf ${(rawGazeConfidence * 100).toFixed(0)}%)`;
         ctx.fillText(`${subHint}  ·  ${inputOriginHint}`, 20, 76);
 
-        if (!localMouseFallback && !isGazeSignalAvailable) {
+        if (!isGazeSignalAvailable) {
+          const mainWarning =
+            getGazeWarningText(guardEval.reason) ??
+            '⚠️ Rostro/mirada no detectada — reubíquese frente a la cámara (acumulación en pausa)';
           ctx.font = 'bold 14px Inter, sans-serif';
           ctx.fillStyle = '#FACC15';
-          ctx.fillText(
-            '⚠️ Rostro/mirada no detectada — reubíquese frente a la cámara (acumulación en pausa)',
-            20,
-            98
-          );
+          ctx.fillText(mainWarning, 20, 98);
         }
       }
 
@@ -2311,6 +2391,10 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       localMouseFallback,
       gazeRef,
       gazeConfidenceRef,
+      gazeSampleSeqRef,
+      gazeLastValidPerfRef,
+      gazeIsBlinkingRef,
+      isWebcamStreaming,
       prescription.parameters.min_fixation_time,
       spawnTutorialTarget,
       isCognitoSession,
@@ -2446,28 +2530,89 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
 
             {/* Cognito persistence badge */}
             {(isCognitoSession || sessionHadCognitoRef.current) && (
-              <div className="bg-white/10 border border-white/15 rounded-xl px-4 py-2.5 text-xs flex flex-wrap items-center justify-center gap-2">
+              <div className="bg-white/10 border border-white/15 rounded-xl px-4 py-3 text-xs flex flex-col items-center justify-center gap-2">
                 {completionState === 'SAVING' ? (
-                  <>
+                  <div className="flex items-center gap-2">
                     <Loader2 size={14} className="animate-spin text-[#8AE2D6]" />
                     <span>Sincronizando telemetría y cierre de sesión clínica...</span>
-                  </>
+                  </div>
+                ) : completionState === 'PENDING_SYNC' ? (
+                  <div className="w-full space-y-2.5 text-left">
+                    <div className="flex items-center gap-2 text-amber-300 font-bold">
+                      <AlertTriangle size={15} className="shrink-0" />
+                      <span>Sincronización pendiente antes de cerrar la sesión clínica</span>
+                    </div>
+                    <p className="text-[11px] text-white/80">
+                      Confirmados: <strong>{syncSummary.confirmedTrials}</strong> · Inciertos/Pendientes:{' '}
+                      <strong>{syncSummary.uncertainTrials + syncSummary.pendingTrials}</strong> · Fallidos:{' '}
+                      <strong>{syncSummary.failedTrials}</strong> · Lotes telemetría pendientes:{' '}
+                      <strong>{syncSummary.pendingTelemetryBatches}</strong>
+                    </p>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => void runCloseSessionFlow(false)}
+                        className="px-3 py-1.5 rounded-lg bg-[#26A69A] hover:bg-[#1E8A80] text-[#0E1722] font-bold text-xs transition-colors"
+                      >
+                        Reintentar sincronización y cerrar sesión
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void runCloseSessionFlow(true)}
+                        className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white border border-white/20 font-semibold text-xs transition-colors"
+                      >
+                        Cerrar sesión clínica de todas formas
+                      </button>
+                    </div>
+                  </div>
+                ) : completionState === 'ERROR' ? (
+                  <div className="w-full space-y-2 text-left">
+                    <div className="flex items-center gap-2 text-red-300 font-bold">
+                      <AlertTriangle size={15} className="shrink-0" />
+                      <span>{backendWarning || 'Error al cerrar la sesión clínica.'}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void runCloseSessionFlow(true)}
+                      className="px-3 py-1.5 rounded-lg bg-red-500/80 hover:bg-red-500 text-white font-bold text-xs transition-colors"
+                    >
+                      Reintentar cierre clínico
+                    </button>
+                  </div>
                 ) : completionState === 'FINISHED' ? (
-                  <>
+                  <div className="flex flex-wrap items-center justify-center gap-2">
                     <CheckCircle size={14} className="text-[#26A69A]" />
                     <span>
                       Sesión registrada como <strong>COMPLETED</strong> · Ensayos enviados:{' '}
                       {trialsSubmittedCount}
                     </span>
-                  </>
+                    {syncSummary.uncertainTrials > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => void trialAnalyticsQueueRef.current?.drainPending(1)}
+                        className="px-2.5 py-1 rounded-md bg-amber-500/25 border border-amber-400/40 text-amber-200 font-semibold text-[11px] hover:bg-amber-500/35"
+                      >
+                        Confirmar ensayos inciertos (ALREADY_STORED)
+                      </button>
+                    )}
+                  </div>
                 ) : completionState === 'ABANDONED' ? (
-                  <>
+                  <div className="flex flex-wrap items-center justify-center gap-2">
                     <AlertTriangle size={14} className="text-amber-400" />
                     <span>
                       Meta no alcanzada; sesión guardada como <strong>ABANDONED</strong> · Ensayos:{' '}
                       {trialsSubmittedCount}
                     </span>
-                  </>
+                    {syncSummary.uncertainTrials > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => void trialAnalyticsQueueRef.current?.drainPending(1)}
+                        className="px-2.5 py-1 rounded-md bg-amber-500/25 border border-amber-400/40 text-amber-200 font-semibold text-[11px] hover:bg-amber-500/35"
+                      >
+                        Confirmar ensayos inciertos (ALREADY_STORED)
+                      </button>
+                    )}
+                  </div>
                 ) : (
                   <span>Estado de envío: {completionState}</span>
                 )}
@@ -2544,7 +2689,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                       : 'ORIGEN: CONTINGENCIA RATÓN'}
                   </span>
                   <span className="font-mono text-[10px] bg-black/30 px-2 py-0.5 rounded">
-                    PRODUCER_REPORTED
+                    {moduleSummary.reportedDataOrigin}
                   </span>
                 </div>
               </div>

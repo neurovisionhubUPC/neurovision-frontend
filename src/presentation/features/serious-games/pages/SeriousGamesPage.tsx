@@ -20,6 +20,7 @@ import {
   initializeTrackingState,
   predictGazePoint,
 } from '../../../../infrastructure/cv/math/zhangYinModel';
+import { MAX_GAZE_STALENESS_MS } from '../../../../infrastructure/therapy/gazeFreshnessGuard';
 import { EyeTrackingGameCanvas } from '../components/EyeTrackingGameCanvas';
 import { CalibrationOverlay } from '../components/CalibrationOverlay';
 import { PreCalibrationView } from '../components/PreCalibrationView';
@@ -190,6 +191,8 @@ export const SeriousGamesPage: React.FC = () => {
   const gazeRef = useRef({ x: 0.5, y: 0.5 });
   const gazeConfidenceRef = useRef<number>(0);
   const lastValidGazePerfRef = useRef<number>(0);
+  const gazeSampleSeqRef = useRef<number>(0);
+  const gazeIsBlinkingRef = useRef<boolean>(false);
   const frameRequestRef = useRef<number>(0);
   const debugRef = useRef<HTMLPreElement>(null);
 
@@ -503,14 +506,17 @@ Yaw: ${(results.rawMetrics.headPose.yaw * (180 / Math.PI)).toFixed(1)}° | Pitch
 
       if (calibrationData && results && results.rawMetrics) {
         if (results.rawMetrics.ear?.isBlinking) {
+          gazeIsBlinkingRef.current = true;
           gazeConfidenceRef.current = 0.0;
           return;
         }
 
         const predictedGaze = predictGazePoint(results.rawMetrics, calibrationData);
         const smoothed = smooth(predictedGaze);
+        gazeIsBlinkingRef.current = false;
         gazeRef.current = smoothed;
         lastValidGazePerfRef.current = performance.now();
+        gazeSampleSeqRef.current += 1;
 
         const r2xRaw = calibrationData.leftModel?.r2X ?? 0.9;
         const r2yRaw = calibrationData.leftModel?.r2Y ?? 0.9;
@@ -535,6 +541,7 @@ Yaw: ${(results.rawMetrics.headPose.yaw * (180 / Math.PI)).toFixed(1)}° | Pitch
 Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
         }
       } else if (!results?.rawMetrics) {
+        gazeIsBlinkingRef.current = false;
         gazeConfidenceRef.current = 0.0;
         if (debugRef.current && !mouseFallbackEnabled) {
           debugRef.current.innerText =
@@ -553,7 +560,7 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
     if (videoRef.current && isStreaming && isReady()) {
       processVideoFrame(videoRef.current, now);
     }
-    if (!mouseFallbackEnabled && (!isStreaming || now - lastValidGazePerfRef.current > 450)) {
+    if (!mouseFallbackEnabled && (!isStreaming || now - lastValidGazePerfRef.current > MAX_GAZE_STALENESS_MS)) {
       gazeConfidenceRef.current = 0.0;
     }
     frameRequestRef.current = requestAnimationFrame(captureLoop);
@@ -570,6 +577,13 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
     startWebcam();
     setGamePhase('CALIBRATION');
   }, [startWebcam, setGamePhase]);
+
+  useEffect(() => {
+    if (!isStreaming) {
+      gazeConfidenceRef.current = 0.0;
+      gazeIsBlinkingRef.current = false;
+    }
+  }, [isStreaming]);
 
   useEffect(() => {
     if (isStreaming) {
@@ -994,6 +1008,10 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
               activeSession={activeClinicalSession}
               sessionProgress={sessionProgress}
               gazeConfidenceRef={gazeConfidenceRef}
+              gazeSampleSeqRef={gazeSampleSeqRef}
+              gazeLastValidPerfRef={lastValidGazePerfRef}
+              gazeIsBlinkingRef={gazeIsBlinkingRef}
+              isWebcamStreaming={isStreaming}
               mouseFallbackEnabled={mouseFallbackEnabled}
               onToggleMouseFallback={() => setMouseFallbackEnabled((prev) => !prev)}
               onSessionProgressUpdate={setSessionProgress}
