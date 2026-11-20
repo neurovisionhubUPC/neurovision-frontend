@@ -15,6 +15,7 @@ export interface QueuedTrialEntry {
   readonly slug: AnalyticsExerciseSlug;
   readonly body: Readonly<AnyTrialBody>;
   status: TrialSubmissionStatus;
+  inFlight: boolean;
   attempts: number;
   lastStatusCode: number | null;
   lastError: string | null;
@@ -26,8 +27,12 @@ export interface TrialAnalyticsQueueSummary {
   pendingCount: number;
   uncertainCount: number;
   failedPermanentCount: number;
+  inFlightCount: number;
   hasUnresolved: boolean;
   hasUncertain: boolean;
+  hasPermanentFailure: boolean;
+  conflictingDuplicateCount: number;
+  lastWarning: string | null;
   entries: readonly QueuedTrialEntry[];
 }
 
@@ -87,6 +92,11 @@ export class TrialAnalyticsQueue {
   private readonly entries: QueuedTrialEntry[] = [];
   private deliveryChain: Promise<void> = Promise.resolve();
   private readonly textEncoder = new TextEncoder();
+  private lifecycleGeneration = 0;
+  private disposed = false;
+  private conflictingDuplicateCount = 0;
+  private lastWarning: string | null = null;
+  private readonly serializedByTrialId = new Map<string, string>();
 
   constructor(options: TrialAnalyticsQueueOptions) {
     this.sendTrial = options.sendTrial;
@@ -99,20 +109,72 @@ export class TrialAnalyticsQueue {
 
   submit(slug: AnalyticsExerciseSlug, body: AnyTrialBody): Promise<QueuedTrialEntry> {
     const frozenBody = deepCloneAndFreeze(body);
+
+    if (this.disposed) {
+      return Promise.resolve(
+        Object.freeze({
+          slug,
+          body: frozenBody,
+          status: 'FAILED_PERMANENT' as const,
+          inFlight: false,
+          attempts: 0,
+          lastStatusCode: null,
+          lastError: 'TrialAnalyticsQueue has been disposed.',
+          receiptStatus: null,
+        })
+      );
+    }
+
     const serialized = JSON.stringify(frozenBody);
     const byteLength = this.textEncoder.encode(serialized).length;
 
+    const existing = this.entries.find((e) => e.body.trialId === frozenBody.trialId);
+    if (existing) {
+      const identical =
+        existing.slug === slug &&
+        this.serializedByTrialId.get(frozenBody.trialId) === serialized;
+
+      if (identical) {
+        if (existing.status === 'CONFIRMED' || existing.status === 'FAILED_PERMANENT') {
+          return Promise.resolve(existing);
+        }
+        if (existing.status === 'PENDING') {
+          return this.deliveryChain.then(() => existing);
+        }
+
+        const generation = this.lifecycleGeneration;
+        const runRetry = this.deliveryChain.then(() =>
+          this.deliverEntry(existing, 2, generation)
+        );
+        this.deliveryChain = runRetry.then(
+          () => undefined,
+          () => undefined
+        );
+        return runRetry.then(() => existing);
+      }
+
+      this.conflictingDuplicateCount += 1;
+      this.lastWarning = `Duplicate trialId ${frozenBody.trialId} with conflicting payload was ignored.`;
+      this.notifyStateChange();
+      return Promise.resolve(existing);
+    }
+
+    this.serializedByTrialId.set(frozenBody.trialId, serialized);
+
     if (byteLength > this.maxBodyBytes) {
+      const lastError = `Trial payload size (${byteLength} bytes) exceeds maximum allowed ${this.maxBodyBytes} UTF-8 bytes.`;
       const rejectedEntry: QueuedTrialEntry = {
         slug,
         body: frozenBody,
         status: 'FAILED_PERMANENT',
+        inFlight: false,
         attempts: 0,
         lastStatusCode: 413,
-        lastError: `Trial payload size (${byteLength} bytes) exceeds maximum allowed ${this.maxBodyBytes} UTF-8 bytes.`,
+        lastError,
         receiptStatus: null,
       };
       this.entries.push(rejectedEntry);
+      this.lastWarning = lastError;
       this.notifyStateChange();
       return Promise.resolve(rejectedEntry);
     }
@@ -121,16 +183,24 @@ export class TrialAnalyticsQueue {
       slug,
       body: frozenBody,
       status: 'PENDING',
+      inFlight: false,
       attempts: 0,
       lastStatusCode: null,
       lastError: null,
       receiptStatus: null,
     };
 
+    const generation = this.lifecycleGeneration;
     this.entries.push(entry);
     this.notifyStateChange();
 
-    const runDelivery = this.deliveryChain.then(() => this.deliverEntry(entry, 2));
+    if (this.disposed || this.lifecycleGeneration !== generation) {
+      return Promise.resolve(entry);
+    }
+
+    const runDelivery = this.deliveryChain.then(() =>
+      this.deliverEntry(entry, 2, generation)
+    );
     this.deliveryChain = runDelivery.then(
       () => undefined,
       () => undefined
@@ -140,10 +210,21 @@ export class TrialAnalyticsQueue {
   }
 
   async drainPending(maxAdditionalAttempts = 2): Promise<TrialAnalyticsQueueSummary> {
+    if (this.disposed) {
+      return this.getSummary();
+    }
+
+    const generation = this.lifecycleGeneration;
     const runDrain = this.deliveryChain.then(async () => {
+      if (this.disposed || this.lifecycleGeneration !== generation) {
+        return;
+      }
       for (const entry of this.entries) {
+        if (this.disposed || this.lifecycleGeneration !== generation) {
+          return;
+        }
         if (entry.status === 'PENDING' || entry.status === 'UNCERTAIN') {
-          await this.deliverEntry(entry, maxAdditionalAttempts);
+          await this.deliverEntry(entry, maxAdditionalAttempts, generation);
         }
       }
     });
@@ -160,8 +241,12 @@ export class TrialAnalyticsQueue {
     let pendingCount = 0;
     let uncertainCount = 0;
     let failedPermanentCount = 0;
+    let inFlightCount = 0;
 
     for (const entry of this.entries) {
+      if (entry.inFlight) {
+        inFlightCount += 1;
+      }
       switch (entry.status) {
         case 'CONFIRMED':
           confirmedCount += 1;
@@ -183,34 +268,87 @@ export class TrialAnalyticsQueue {
       pendingCount,
       uncertainCount,
       failedPermanentCount,
+      inFlightCount,
       hasUnresolved: pendingCount > 0 || uncertainCount > 0,
       hasUncertain: uncertainCount > 0,
+      hasPermanentFailure: failedPermanentCount > 0,
+      conflictingDuplicateCount: this.conflictingDuplicateCount,
+      lastWarning: this.lastWarning,
       entries: this.entries.slice(),
     };
   }
 
+  dispose(): void {
+    this.disposed = true;
+    this.lifecycleGeneration += 1;
+    this.deliveryChain = Promise.resolve();
+    for (const entry of this.entries) {
+      entry.inFlight = false;
+    }
+  }
+
   reset(): void {
+    this.lifecycleGeneration += 1;
+    this.disposed = false;
     this.entries.length = 0;
+    this.serializedByTrialId.clear();
+    this.conflictingDuplicateCount = 0;
+    this.lastWarning = null;
     this.deliveryChain = Promise.resolve();
     this.notifyStateChange();
   }
 
-  private async deliverEntry(entry: QueuedTrialEntry, maxAttempts: number): Promise<void> {
+  private async deliverEntry(
+    entry: QueuedTrialEntry,
+    maxAttempts: number,
+    generation: number
+  ): Promise<void> {
+    if (this.disposed || this.lifecycleGeneration !== generation) {
+      return;
+    }
     if (entry.status === 'CONFIRMED' || entry.status === 'FAILED_PERMANENT') {
       return;
     }
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (this.disposed || this.lifecycleGeneration !== generation) {
+        return;
+      }
+
       entry.attempts += 1;
+      entry.inFlight = true;
+      this.notifyStateChange();
+
+      if (this.disposed || this.lifecycleGeneration !== generation) {
+        entry.inFlight = false;
+        return;
+      }
+
       try {
         const receipt = await this.sendTrial(entry.slug, entry.body);
+        if (this.disposed || this.lifecycleGeneration !== generation) {
+          return;
+        }
+        entry.inFlight = false;
         entry.status = 'CONFIRMED';
         entry.receiptStatus = receipt.status;
         entry.lastStatusCode = receipt.status === 'CREATED' ? 201 : 200;
         entry.lastError = null;
+        if (
+          this.conflictingDuplicateCount === 0 &&
+          !this.entries.some(
+            (e) => e.status === 'FAILED_PERMANENT' || e.status === 'UNCERTAIN'
+          )
+        ) {
+          this.lastWarning = null;
+        }
         this.notifyStateChange();
         return;
       } catch (err) {
+        if (this.disposed || this.lifecycleGeneration !== generation) {
+          return;
+        }
+        entry.inFlight = false;
         const statusCode = extractStatusCode(err);
         const errorMessage = err instanceof Error ? err.message : String(err);
         entry.lastStatusCode = statusCode;
@@ -218,21 +356,33 @@ export class TrialAnalyticsQueue {
 
         if (PERMANENT_FAILURE_STATUS_CODES.has(statusCode)) {
           entry.status = 'FAILED_PERMANENT';
+          this.lastWarning = `Trial ${entry.body.trialId} permanently rejected (HTTP ${statusCode}): ${errorMessage}`;
           this.notifyStateChange();
           return;
         }
 
         if (attempt < maxAttempts && this.retryBackoffMs > 0) {
           await this.sleep(this.retryBackoffMs);
+          if (this.disposed || this.lifecycleGeneration !== generation) {
+            return;
+          }
         }
       }
     }
 
+    if (this.disposed || this.lifecycleGeneration !== generation) {
+      return;
+    }
+    entry.inFlight = false;
     entry.status = 'UNCERTAIN';
+    this.lastWarning = `Trial ${entry.body.trialId} delivery uncertain (HTTP ${entry.lastStatusCode ?? 0}): ${entry.lastError ?? 'Unknown error'}`;
     this.notifyStateChange();
   }
 
   private notifyStateChange(): void {
+    if (this.disposed) {
+      return;
+    }
     this.onStateChange?.(this.getSummary());
   }
 }

@@ -20,13 +20,18 @@ export type TelemetryBatchSendFn = (
 
 export interface TelemetryQueueSnapshot {
   pendingCount: number;
+  inFlightCount: number;
+  bufferedSampleCount: number;
   brokerAcceptedCount: number;
   permanentRejectedCount: number;
   droppedOverflowCount: number;
+  hasPermanentDataLoss: boolean;
   streamId: string;
   nextSequence: number;
   lastWarning: string | null;
 }
+
+const PERMANENT_TELEMETRY_REJECT_CODES = new Set([400, 403, 413, 415]);
 
 export interface TelemetryBatchQueueOptions {
   therapySessionId: string;
@@ -160,6 +165,9 @@ export class TelemetryBatchQueue {
   private droppedOverflowCount = 0;
   private lastWarning: string | null = null;
   private activeDrainPromise: Promise<void> | null = null;
+  private lifecycleGeneration = 0;
+  private disposed = false;
+  private followUpDrainRequested = false;
 
   constructor(options: TelemetryBatchQueueOptions) {
     this.therapySessionId = options.therapySessionId;
@@ -180,6 +188,10 @@ export class TelemetryBatchQueue {
   }
 
   recordSample(sample: RecordTelemetrySampleInput): void {
+    if (this.disposed) {
+      return;
+    }
+
     const hasGaze = sample.gaze !== undefined && sample.gaze !== null;
     const hasGameplay = sample.gameplay !== undefined && sample.gameplay !== null;
     if (!hasGaze && !hasGameplay) {
@@ -233,6 +245,10 @@ export class TelemetryBatchQueue {
   }
 
   enqueueBuffers(): number {
+    if (this.disposed) {
+      return 0;
+    }
+
     if (this.gazeBuffer.length === 0 && this.gameplayBuffer.length === 0) {
       return 0;
     }
@@ -296,6 +312,9 @@ export class TelemetryBatchQueue {
     }
 
     if (enqueuedCount > 0) {
+      if (this.activeDrainPromise) {
+        this.followUpDrainRequested = true;
+      }
       this.notifyStateChange();
     }
 
@@ -307,6 +326,10 @@ export class TelemetryBatchQueue {
     gameplaySamples: readonly TelemetryGameplaySampleBody[],
     capturedAtIso?: string
   ): PendingTelemetryBatchEntry | null {
+    if (this.disposed) {
+      return null;
+    }
+
     if (gazeSamples.length === 0 && gameplaySamples.length === 0) {
       return null;
     }
@@ -350,31 +373,47 @@ export class TelemetryBatchQueue {
     };
 
     this.queue.push(entry);
+    if (this.activeDrainPromise) {
+      this.followUpDrainRequested = true;
+    }
     this.notifyStateChange();
     return entry;
   }
 
   async flush(): Promise<void> {
-    this.enqueueBuffers();
-
-    if (this.activeDrainPromise) {
-      await this.activeDrainPromise;
-      this.enqueueBuffers();
-      if (this.queue.length === 0) {
-        return;
-      }
-    }
-
-    if (this.queue.length === 0) {
+    if (this.disposed) {
       return;
     }
 
-    this.activeDrainPromise = this.drainLoop();
+    const enqueued = this.enqueueBuffers();
+
+    if (this.activeDrainPromise) {
+      if (enqueued > 0) {
+        this.followUpDrainRequested = true;
+      }
+      await this.activeDrainPromise;
+      return;
+    }
+
+    if (this.disposed || this.queue.length === 0) {
+      return;
+    }
+
+    const generation = this.lifecycleGeneration;
+    this.activeDrainPromise = this.drainLoop(generation);
     await this.activeDrainPromise;
   }
 
   rotateStream(): Promise<void> {
-    this.enqueueBuffers();
+    if (this.disposed) {
+      return Promise.resolve();
+    }
+
+    const enqueued = this.enqueueBuffers();
+    if (enqueued > 0 && this.activeDrainPromise) {
+      this.followUpDrainRequested = true;
+    }
+
     this.streamId = this.uuid();
     this.nextSequence = 0;
     this.gazeBuffer = [];
@@ -393,11 +432,21 @@ export class TelemetryBatchQueue {
   }
 
   getSnapshot(): TelemetryQueueSnapshot {
+    let inFlightCount = 0;
+    for (const entry of this.queue) {
+      if (entry.inFlight) {
+        inFlightCount += 1;
+      }
+    }
+
     return {
       pendingCount: this.queue.length,
+      inFlightCount,
+      bufferedSampleCount: this.gazeBuffer.length + this.gameplayBuffer.length,
       brokerAcceptedCount: this.brokerAcceptedCount,
       permanentRejectedCount: this.permanentRejectedCount,
       droppedOverflowCount: this.droppedOverflowCount,
+      hasPermanentDataLoss: this.permanentRejectedCount > 0 || this.droppedOverflowCount > 0,
       streamId: this.streamId,
       nextSequence: this.nextSequence,
       lastWarning: this.lastWarning,
@@ -410,7 +459,21 @@ export class TelemetryBatchQueue {
     );
   }
 
+  dispose(): void {
+    this.disposed = true;
+    this.lifecycleGeneration += 1;
+    this.activeDrainPromise = null;
+    this.followUpDrainRequested = false;
+    this.gazeBuffer = [];
+    this.gameplayBuffer = [];
+  }
+
   reset(newTherapySessionId?: string): void {
+    this.lifecycleGeneration += 1;
+    this.disposed = false;
+    this.activeDrainPromise = null;
+    this.followUpDrainRequested = false;
+
     if (newTherapySessionId !== undefined) {
       this.therapySessionId = newTherapySessionId;
     }
@@ -432,64 +495,115 @@ export class TelemetryBatchQueue {
     this.notifyStateChange();
   }
 
-  private async drainLoop(): Promise<void> {
+  private async drainLoop(generation: number): Promise<void> {
     try {
-      while (this.queue.length > 0) {
-        const entry = this.queue[0];
-        const targetBatchId = entry.body.batchId;
-        entry.inFlight = true;
-        let deliveredOrDiscarded = false;
-
-        for (let attempt = 1; attempt <= this.maxAttemptsPerFlush; attempt++) {
-          entry.attempts += 1;
-          try {
-            await this.sendBatch(entry.body);
-            const idx = this.queue.findIndex((e) => e.body.batchId === targetBatchId);
-            if (idx !== -1) {
-              this.queue.splice(idx, 1);
-            }
-            this.brokerAcceptedCount += 1;
-            this.lastWarning = null;
-            this.notifyStateChange();
-            deliveredOrDiscarded = true;
-            break;
-          } catch (err) {
-            const statusCode = extractStatusCode(err);
-            const errorMessage = err instanceof Error ? err.message : String(err);
-            entry.lastStatusCode = statusCode;
-            entry.lastError = errorMessage;
-
-            if (statusCode === 400 || statusCode === 403) {
-              const idx = this.queue.findIndex((e) => e.body.batchId === targetBatchId);
-              if (idx !== -1) {
-                this.queue.splice(idx, 1);
-              }
-              this.permanentRejectedCount += 1;
-              this.lastWarning = `Telemetry batch ${targetBatchId} permanently rejected (HTTP ${statusCode}): ${errorMessage}`;
-              this.notifyStateChange();
-              deliveredOrDiscarded = true;
-              break;
-            }
-
-            if (attempt < this.maxAttemptsPerFlush && this.retryBackoffMs > 0) {
-              await this.sleep(this.retryBackoffMs);
-            }
-          }
+      while (!this.disposed && this.lifecycleGeneration === generation) {
+        this.followUpDrainRequested = false;
+        this.enqueueBuffers();
+        if (this.queue.length === 0) {
+          break;
         }
 
-        if (!deliveredOrDiscarded) {
-          entry.inFlight = false;
-          this.lastWarning = `Telemetry batch ${targetBatchId} pending retry (HTTP ${entry.lastStatusCode ?? 0}): ${entry.lastError ?? 'Unknown error'}`;
-          this.notifyStateChange();
+        const blockedByTransientError = await this.drainQueuePass(generation);
+        if (blockedByTransientError || this.disposed || this.lifecycleGeneration !== generation) {
+          break;
+        }
+
+        if (
+          !this.followUpDrainRequested &&
+          this.queue.length === 0 &&
+          this.gazeBuffer.length === 0 &&
+          this.gameplayBuffer.length === 0
+        ) {
           break;
         }
       }
     } finally {
-      this.activeDrainPromise = null;
+      if (this.lifecycleGeneration === generation) {
+        this.activeDrainPromise = null;
+        this.followUpDrainRequested = false;
+      }
     }
   }
 
+  private async drainQueuePass(generation: number): Promise<boolean> {
+    while (!this.disposed && this.lifecycleGeneration === generation && this.queue.length > 0) {
+      const entry = this.queue[0];
+      const targetBatchId = entry.body.batchId;
+      entry.inFlight = true;
+      this.notifyStateChange();
+
+      let deliveredOrDiscarded = false;
+
+      for (let attempt = 1; attempt <= this.maxAttemptsPerFlush; attempt++) {
+        if (this.disposed || this.lifecycleGeneration !== generation) {
+          return true;
+        }
+
+        entry.attempts += 1;
+        try {
+          await this.sendBatch(entry.body);
+          if (this.disposed || this.lifecycleGeneration !== generation) {
+            return true;
+          }
+
+          const idx = this.queue.findIndex((e) => e.body.batchId === targetBatchId);
+          if (idx !== -1) {
+            this.queue.splice(idx, 1);
+            entry.inFlight = false;
+            this.brokerAcceptedCount += 1;
+            this.lastWarning = null;
+            this.notifyStateChange();
+          }
+          deliveredOrDiscarded = true;
+          break;
+        } catch (err) {
+          if (this.disposed || this.lifecycleGeneration !== generation) {
+            return true;
+          }
+
+          const statusCode = extractStatusCode(err);
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          entry.lastStatusCode = statusCode;
+          entry.lastError = errorMessage;
+
+          if (PERMANENT_TELEMETRY_REJECT_CODES.has(statusCode)) {
+            const idx = this.queue.findIndex((e) => e.body.batchId === targetBatchId);
+            if (idx !== -1) {
+              this.queue.splice(idx, 1);
+              entry.inFlight = false;
+              this.permanentRejectedCount += 1;
+              this.lastWarning = `Telemetry batch ${targetBatchId} permanently rejected (HTTP ${statusCode}): ${errorMessage}`;
+              this.notifyStateChange();
+            }
+            deliveredOrDiscarded = true;
+            break;
+          }
+
+          if (attempt < this.maxAttemptsPerFlush && this.retryBackoffMs > 0) {
+            await this.sleep(this.retryBackoffMs);
+          }
+        }
+      }
+
+      if (!deliveredOrDiscarded) {
+        if (this.disposed || this.lifecycleGeneration !== generation) {
+          return true;
+        }
+        entry.inFlight = false;
+        this.lastWarning = `Telemetry batch ${targetBatchId} pending retry (HTTP ${entry.lastStatusCode ?? 0}): ${entry.lastError ?? 'Unknown error'}`;
+        this.notifyStateChange();
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   private notifyStateChange(): void {
+    if (this.disposed) {
+      return;
+    }
     this.onStateChange?.(this.getSnapshot());
   }
 }

@@ -63,13 +63,13 @@ import {
 } from '../../../../infrastructure/api';
 import {
   GazeFreshnessGuard,
+  MAX_GAZE_STALENESS_MS,
   type GazeFreshnessReason,
 } from '../../../../infrastructure/therapy/gazeFreshnessGuard';
-import { TelemetryBatchQueue } from '../../../../infrastructure/telemetry/telemetryBatchQueue';
 import {
-  TrialAnalyticsQueue,
-  type TrialAnalyticsQueueSummary,
-} from '../../../../infrastructure/telemetry/trialAnalyticsQueue';
+  SessionDeliveryController,
+  type SessionSyncSummary,
+} from '../../../../infrastructure/telemetry/sessionDeliveryController';
 import {
   Award,
   CheckCircle,
@@ -149,12 +149,25 @@ interface ModuleSessionSummary {
   reportedDataOrigin: 'PRODUCER_REPORTED' | 'SYNTHETIC' | 'MIXED';
 }
 
-interface SyncSummaryState {
-  confirmedTrials: number;
-  pendingTrials: number;
-  uncertainTrials: number;
-  failedTrials: number;
-  pendingTelemetryBatches: number;
+function createEmptySyncSummary(sessionId: string | null = null): SessionSyncSummary {
+  return {
+    sessionId,
+    confirmedTrials: 0,
+    pendingTrials: 0,
+    uncertainTrials: 0,
+    failedPermanentTrials: 0,
+    inFlightTrials: 0,
+    pendingTelemetryBatches: 0,
+    inFlightTelemetryBatches: 0,
+    bufferedTelemetrySamples: 0,
+    brokerAcceptedTelemetryBatches: 0,
+    permanentRejectedTelemetryBatches: 0,
+    droppedOverflowTelemetryBatches: 0,
+    hasPendingOrUncertainDelivery: false,
+    hasPermanentDataLoss: false,
+    isSyncComplete: true,
+    lastWarning: null,
+  };
 }
 
 function getGazeWarningText(reason: GazeFreshnessReason): string | null {
@@ -162,7 +175,7 @@ function getGazeWarningText(reason: GazeFreshnessReason): string | null {
     case 'BLINKING':
       return '👁️ Parpadeo detectado — fijación pausada';
     case 'STALE_SAMPLE':
-      return '⚠️ Señal ocular detenida (>150ms) — reubíquese frente a la cámara';
+      return `⚠️ Señal ocular detenida (>${MAX_GAZE_STALENESS_MS}ms) — reubíquese frente a la cámara`;
     case 'STREAM_STOPPED':
       return '⚠️ Cámara detenida — reactívela para continuar';
     case 'LOW_CONFIDENCE':
@@ -318,9 +331,11 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   const [isPaused, setIsPaused] = useState(false);
   const isPausedRef = useRef(false);
   const [localMouseFallback, setLocalMouseFallback] = useState(mouseFallbackEnabled);
+  const localMouseFallbackRef = useRef<boolean>(mouseFallbackEnabled);
   const mousePointRef = useRef<Point2D>({ x: 0.5, y: 0.5 });
 
   useEffect(() => {
+    localMouseFallbackRef.current = mouseFallbackEnabled;
     setLocalMouseFallback(mouseFallbackEnabled);
   }, [mouseFallbackEnabled]);
 
@@ -332,6 +347,8 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
+      deliveryControllerRef.current?.dispose();
+      deliveryControllerRef.current = null;
     };
   }, []);
 
@@ -344,14 +361,9 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   useEffect(() => {
     completionStateRef.current = completionState;
   }, [completionState]);
-  const [trialsSubmittedCount, setTrialsSubmittedCount] = useState(0);
-  const [syncSummary, setSyncSummary] = useState<SyncSummaryState>({
-    confirmedTrials: 0,
-    pendingTrials: 0,
-    uncertainTrials: 0,
-    failedTrials: 0,
-    pendingTelemetryBatches: 0,
-  });
+  const [syncSummary, setSyncSummary] = useState<SessionSyncSummary>(() =>
+    createEmptySyncSummary(null)
+  );
 
   const resolvedMode: ReportMode =
     exerciseMode ||
@@ -395,8 +407,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   // Clinical lifecycle refs (strictly ordered & race-free)
   const nextSequenceRef = useRef<number>(sessionProgress?.nextSequence ?? 0);
   const eventQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const telemetryQueueManagerRef = useRef<TelemetryBatchQueue | null>(null);
-  const trialAnalyticsQueueRef = useRef<TrialAnalyticsQueue | null>(null);
+  const deliveryControllerRef = useRef<SessionDeliveryController | null>(null);
   const gazeFreshnessGuardRef = useRef(new GazeFreshnessGuard());
   const hasMousePointerMovedRef = useRef<boolean>(false);
   const fallbackSampleSeqRef = useRef<number>(0);
@@ -429,85 +440,73 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
     }
   }, [sessionProgress]);
 
-  // Reset lifecycle refs & initialize queues when activeSessionId changes
+  // Reset lifecycle refs & initialize SessionDeliveryController when activeSessionId changes
   useEffect(() => {
-    if (!activeSessionId || !isCognitoSession) {
-      telemetryQueueManagerRef.current = null;
-      trialAnalyticsQueueRef.current = null;
-      if (!activeSessionId) return;
-    }
+    const targetSessionId = isCognitoSession && activeSessionId ? activeSessionId : null;
 
-    nextSequenceRef.current = latestProgressRef.current?.nextSequence ?? 0;
-    repetitionCounterRef.current = latestProgressRef.current?.completedRepetitions ?? 0;
-    currentRepObjRef.current = null;
-    sessionHadCognitoRef.current = false;
-    isBootstrappedRef.current = false;
-    isCompletingRef.current = false;
-    completionKeyRef.current = createUuid();
-    webcamGazeSamplesCountRef.current = 0;
-    mouseFallbackSamplesCountRef.current = 0;
-    gazeFreshnessGuardRef.current.reset();
-    hasMousePointerMovedRef.current = false;
-    fallbackSampleSeqRef.current = 0;
-    trialUsedMouseFallbackRef.current = mouseFallbackEnabled;
-    sessionTrialOriginsRef.current = { producerReported: 0, synthetic: 0 };
-    setCompletionState('IDLE');
-    setBackendWarning(null);
-    setTrialsSubmittedCount(0);
-    setSyncSummary({
-      confirmedTrials: 0,
-      pendingTrials: 0,
-      uncertainTrials: 0,
-      failedTrials: 0,
-      pendingTelemetryBatches: 0,
-    });
-
-    if (isCognitoSession && activeSessionId) {
-      telemetryQueueManagerRef.current = new TelemetryBatchQueue({
-        therapySessionId: activeSessionId,
-        sendBatch: (body) => telemetryApi.sendTelemetryBatch(body),
-        onStateChange: (snapshot) => {
+    if (deliveryControllerRef.current === null) {
+      deliveryControllerRef.current = new SessionDeliveryController({
+        sendTelemetryBatch: (body) => telemetryApi.sendTelemetryBatch(body),
+        sendTrialResult: (sessionId, slug, body) =>
+          analyticsApi.submitTrialResult(sessionId, slug, body),
+        onSyncSummaryChange: (summary) => {
           if (!isMountedRef.current) return;
-          setSyncSummary((prev) => ({
-            ...prev,
-            pendingTelemetryBatches: snapshot.pendingCount,
-          }));
-          if (snapshot.lastWarning) {
-            setBackendWarning(snapshot.lastWarning);
+          setSyncSummary(summary);
+          if (summary.lastWarning) {
+            setBackendWarning(summary.lastWarning);
           } else {
             setBackendWarning((prev) =>
-              prev && (prev.startsWith('Telemetry') || prev.startsWith('Telemetría'))
+              prev &&
+              (prev.startsWith('Telemetry') ||
+                prev.startsWith('Telemetría') ||
+                prev.startsWith('Duplicate trialId') ||
+                prev.startsWith('Trial '))
                 ? null
                 : prev
             );
           }
         },
       });
-
-      trialAnalyticsQueueRef.current = new TrialAnalyticsQueue({
-        sendTrial: (slug, body) => analyticsApi.submitTrialResult(activeSessionId, slug, body),
-        onStateChange: (summary: TrialAnalyticsQueueSummary) => {
-          if (!isMountedRef.current) return;
-          setTrialsSubmittedCount(summary.confirmedCount);
-          setSyncSummary((prev) => ({
-            ...prev,
-            confirmedTrials: summary.confirmedCount,
-            pendingTrials: summary.pendingCount,
-            uncertainTrials: summary.uncertainCount,
-            failedTrials: summary.failedPermanentCount,
-          }));
-          if (summary.failedPermanentCount > 0) {
-            const lastFailed = [...summary.entries]
-              .reverse()
-              .find((e) => e.status === 'FAILED_PERMANENT');
-            if (lastFailed?.lastError) {
-              setBackendWarning(`Analítica ensayo: ${lastFailed.lastError}`);
-            }
-          }
-        },
-      });
     }
-  }, [activeSessionId, isCognitoSession, mouseFallbackEnabled]);
+
+    const controller = deliveryControllerRef.current;
+
+    if (!targetSessionId) {
+      if (
+        !isCompletingRef.current &&
+        completionStateRef.current !== 'FINISHED' &&
+        completionStateRef.current !== 'ABANDONED'
+      ) {
+        controller.syncSession(null, localMouseFallbackRef.current);
+        setSyncSummary(controller.getSyncSummary());
+      }
+      return;
+    }
+
+    const sessionChanged = controller.syncSession(
+      targetSessionId,
+      localMouseFallbackRef.current
+    );
+    if (sessionChanged) {
+      nextSequenceRef.current = latestProgressRef.current?.nextSequence ?? 0;
+      repetitionCounterRef.current = latestProgressRef.current?.completedRepetitions ?? 0;
+      currentRepObjRef.current = null;
+      sessionHadCognitoRef.current = false;
+      isBootstrappedRef.current = false;
+      isCompletingRef.current = false;
+      completionKeyRef.current = createUuid();
+      webcamGazeSamplesCountRef.current = 0;
+      mouseFallbackSamplesCountRef.current = 0;
+      gazeFreshnessGuardRef.current.reset();
+      hasMousePointerMovedRef.current = false;
+      fallbackSampleSeqRef.current = 0;
+      trialUsedMouseFallbackRef.current = localMouseFallbackRef.current;
+      sessionTrialOriginsRef.current = { producerReported: 0, synthetic: 0 };
+      setCompletionState('IDLE');
+      setBackendWarning(null);
+      setSyncSummary(controller.getSyncSummary());
+    }
+  }, [activeSessionId, isCognitoSession]);
 
   const enqueueActivityEvent = useCallback(
     (buildEvent: (seq: number) => PatientActivityEventBody): Promise<void> => {
@@ -640,17 +639,20 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   );
 
   const flushTelemetryBuffer = useCallback((): Promise<void> => {
-    if (!isCognitoSession || !activeSessionId || !telemetryQueueManagerRef.current) {
+    if (!isCognitoSession || !activeSessionId || !deliveryControllerRef.current) {
       return Promise.resolve();
     }
-    return telemetryQueueManagerRef.current.flush().then(() => undefined);
+    return deliveryControllerRef.current.flushTelemetry().then(() => undefined);
   }, [isCognitoSession, activeSessionId]);
 
   // Isolate telemetry streamId when switching input origin between Webcam Gaze and Mouse Fallback
   useEffect(() => {
+    localMouseFallbackRef.current = localMouseFallback;
     if (prevMouseFallbackRef.current !== localMouseFallback) {
       prevMouseFallbackRef.current = localMouseFallback;
-      void telemetryQueueManagerRef.current?.rotateStream();
+      gazeFreshnessGuardRef.current.reset();
+      hasMousePointerMovedRef.current = false;
+      void deliveryControllerRef.current?.handleInputOriginChange(localMouseFallback);
     }
     if (localMouseFallback && gamePhase === 'MAIN_GAME') {
       trialUsedMouseFallbackRef.current = true;
@@ -690,11 +692,11 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
 
   const submitTrialAnalytics = useCallback(
     (body: AnyTrialBody): Promise<void> => {
-      if (!isCognitoSession || !activeSessionId || !trialAnalyticsQueueRef.current) {
+      if (!isCognitoSession || !activeSessionId || !deliveryControllerRef.current) {
         return Promise.resolve();
       }
       const slug = modeToAnalyticsSlug(resolvedMode);
-      return trialAnalyticsQueueRef.current.submit(slug, body).then(() => undefined);
+      return deliveryControllerRef.current.submitTrial(slug, body).then(() => undefined);
     },
     [isCognitoSession, activeSessionId, resolvedMode]
   );
@@ -920,7 +922,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
     (emitRepetitionStart: boolean) => {
       const s = gameState.current;
       const trialIdx = s.completedTrials;
-      trialUsedMouseFallbackRef.current = localMouseFallback;
+      trialUsedMouseFallbackRef.current = localMouseFallbackRef.current;
 
       s.trialElapsedMs = 0;
       s.explorationStepIndex = 0;
@@ -1014,7 +1016,6 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       isCognitoSession,
       activeSessionId,
       enqueueActivityEvent,
-      localMouseFallback,
     ]
   );
 
@@ -1036,19 +1037,20 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         ? 100
         : 0;
 
+    const isMouseFallbackNow = localMouseFallbackRef.current;
     const webcamSamples = webcamGazeSamplesCountRef.current;
     const mouseSamples = mouseFallbackSamplesCountRef.current;
     const totalOriginSamples = webcamSamples + mouseSamples;
     const inputOrigin: 'WEBCAM_GAZE' | 'MOUSE_FALLBACK' | 'MIXED' =
       webcamSamples > 0 && mouseSamples > 0
         ? 'MIXED'
-        : mouseSamples > 0 || localMouseFallback
+        : mouseSamples > 0 || isMouseFallbackNow
         ? 'MOUSE_FALLBACK'
         : 'WEBCAM_GAZE';
     const webcamSamplePercent =
       totalOriginSamples > 0
         ? Math.round((webcamSamples / totalOriginSamples) * 100)
-        : localMouseFallback
+        : isMouseFallbackNow
         ? 0
         : 100;
 
@@ -1056,7 +1058,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
     const reportedDataOrigin: 'PRODUCER_REPORTED' | 'SYNTHETIC' | 'MIXED' =
       producerReported > 0 && synthetic > 0
         ? 'MIXED'
-        : synthetic > 0 || localMouseFallback
+        : synthetic > 0 || isMouseFallbackNow
         ? 'SYNTHETIC'
         : 'PRODUCER_REPORTED';
 
@@ -1073,45 +1075,36 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       webcamSamplePercent,
       reportedDataOrigin,
     };
-  }, [localMouseFallback]);
+  }, []);
 
   const runCloseSessionFlow = useCallback(
     async (forceCloseWithoutSync: boolean) => {
       if (!isCognitoSession || !activeSessionId) return;
 
       if (isMountedRef.current) {
+        completionStateRef.current = 'SAVING';
         setCompletionState('SAVING');
       }
 
       // Wait for all in-flight trial results, ordered activity events & remaining telemetry samples
       // BEFORE closing the clinical session (analytics requires a live ACTIVE clinical session!)
-      await Promise.all([
+      const [, gate] = await Promise.all([
         eventQueueRef.current.catch(() => undefined),
-        trialAnalyticsQueueRef.current?.drainPending(2).catch(() => undefined),
-        telemetryQueueManagerRef.current?.flush().catch(() => undefined),
+        deliveryControllerRef.current
+          ? deliveryControllerRef.current.prepareClosure(forceCloseWithoutSync)
+          : Promise.resolve(null),
       ]);
 
-      const trialSummary = trialAnalyticsQueueRef.current?.getSummary();
-      const telemetrySnap = telemetryQueueManagerRef.current?.getSnapshot();
-
-      if (isMountedRef.current) {
-        setSyncSummary({
-          confirmedTrials: trialSummary?.confirmedCount ?? 0,
-          pendingTrials: trialSummary?.pendingCount ?? 0,
-          uncertainTrials: trialSummary?.uncertainCount ?? 0,
-          failedTrials: trialSummary?.failedPermanentCount ?? 0,
-          pendingTelemetryBatches: telemetrySnap?.pendingCount ?? 0,
-        });
+      if (isMountedRef.current && gate) {
+        setSyncSummary(gate.summary);
       }
 
-      if (
-        !forceCloseWithoutSync &&
-        ((trialSummary?.hasUnresolved ?? false) || (telemetrySnap?.pendingCount ?? 0) > 0)
-      ) {
+      if (gate && !gate.allowedToClose) {
         if (isMountedRef.current) {
+          completionStateRef.current = 'PENDING_SYNC';
           setCompletionState('PENDING_SYNC');
           setBackendWarning(
-            'Hay ensayos o lotes de telemetría pendientes de sincronización antes de cerrar la sesión clínica.'
+            'Hay ensayos o lotes de telemetría pendientes o con estado incierto antes de cerrar la sesión clínica.'
           );
         }
         return;
@@ -1133,6 +1126,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         const mapped =
           latestProg.status === 'COMPLETED' ? 'FINISHED' : 'ABANDONED';
         if (isMountedRef.current) {
+          completionStateRef.current = mapped;
           setCompletionState(mapped);
           onSessionProgressUpdate?.(latestProg);
           onSessionCompleted?.(latestProg, mapped);
@@ -1148,12 +1142,14 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         );
         latestProgressRef.current = completed;
         if (isMountedRef.current) {
+          completionStateRef.current = action;
           setCompletionState(action);
           onSessionProgressUpdate?.(completed);
           onSessionCompleted?.(completed, action);
         }
       } catch (err) {
         if (isMountedRef.current) {
+          completionStateRef.current = 'ERROR';
           setCompletionState('ERROR');
           setBackendWarning(`Cierre de sesión: ${extractApiErrorMessage(err)}`);
         }
@@ -1390,7 +1386,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       trajectoryRef.current = [];
       gazeFreshnessGuardRef.current.reset();
       hasMousePointerMovedRef.current = false;
-      trialUsedMouseFallbackRef.current = prevMouseFallbackRef.current;
+      trialUsedMouseFallbackRef.current = localMouseFallbackRef.current;
       setReport(null);
       setIsPaused(false);
       isCompletingRef.current = false;
@@ -1626,7 +1622,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!localMouseFallback) return;
+    if (!localMouseFallbackRef.current) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -1679,7 +1675,8 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         ctx.restore();
       }
 
-      const activeGaze = localMouseFallback ? mousePointRef.current : gazeRef.current;
+      const isMouseFallback = localMouseFallbackRef.current;
+      const activeGaze = isMouseFallback ? mousePointRef.current : gazeRef.current;
       const normGazeX = clamp01(activeGaze.x);
       const normGazeY = clamp01(activeGaze.y);
       const cursorX = normGazeX * width;
@@ -1689,7 +1686,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         ? clamp01(gazeConfidenceRef.current)
         : 0.85;
       const nowPerfMs = performance.now();
-      if (localMouseFallback && gamePhase === 'MAIN_GAME') {
+      if (isMouseFallback && gamePhase === 'MAIN_GAME') {
         trialUsedMouseFallbackRef.current = true;
       }
       const trialOrigin: AnalyticsDataOrigin = trialUsedMouseFallbackRef.current
@@ -1710,7 +1707,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       const guardEval = gazeFreshnessGuardRef.current.evaluateFrame({
         nowPerfMs,
         deltaTimeMs: deltaTime,
-        isMouseFallback: localMouseFallback,
+        isMouseFallback,
         hasMousePointerMoved: hasMousePointerMovedRef.current,
         isWebcamStreaming: isWebcamStreaming ?? true,
         confidence: rawGazeConfidence,
@@ -1720,7 +1717,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       });
 
       const isGazeSignalAvailable = guardEval.isSignalFresh;
-      const currentConf = localMouseFallback ? 0.95 : rawGazeConfidence;
+      const currentConf = isMouseFallback ? 0.95 : rawGazeConfidence;
 
       const s = gameState.current;
       if (deltaTime > 0) {
@@ -1811,7 +1808,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
 
         if (!isPausedRef.current) {
           if (isGazeSignalAvailable) {
-            if (localMouseFallback) {
+            if (isMouseFallback) {
               mouseFallbackSamplesCountRef.current += 1;
             } else {
               webcamGazeSamplesCountRef.current += 1;
@@ -1831,7 +1828,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
           if (
             isCognitoSession &&
             activeSessionId &&
-            telemetryQueueManagerRef.current &&
+            deliveryControllerRef.current &&
             perfNow - lastTelemetrySamplePerfRef.current >= 32
           ) {
             lastTelemetrySamplePerfRef.current = perfNow;
@@ -1846,7 +1843,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
             // In mouse fallback or during transient face/blink/stale loss, gazeSamples remains []
             // while gameplaySamples records the player state (`telemetry/integration.md` line 18).
             const emitGaze = guardEval.isNewSampleForTelemetry;
-            telemetryQueueManagerRef.current.recordSample({
+            deliveryControllerRef.current.recordTelemetrySample({
               gaze: emitGaze
                 ? {
                     x: normGazeX,
@@ -2354,7 +2351,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                 s.entities.filter((e) => e.kind === 'TARGET' && !e.found).length
               }`
             : `Error distancia: ${Math.round(distPrimary)} px`;
-        const inputOriginHint = localMouseFallback
+        const inputOriginHint = isMouseFallback
           ? 'Origen: RATÓN FALLBACK (gameplaySamples)'
           : `Origen: MIRADA WEBCAM (conf ${(rawGazeConfidence * 100).toFixed(0)}%)`;
         ctx.fillText(`${subHint}  ·  ${inputOriginHint}`, 20, 76);
@@ -2372,7 +2369,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       // Gaze cursor indicator
       ctx.beginPath();
       ctx.arc(cursorX, cursorY, 10, 0, Math.PI * 2);
-      ctx.fillStyle = localMouseFallback
+      ctx.fillStyle = isMouseFallback
         ? 'rgba(38, 166, 154, 0.75)'
         : 'rgba(255, 255, 255, 0.55)';
       ctx.fill();
@@ -2388,7 +2385,6 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       width,
       height,
       gamePhase,
-      localMouseFallback,
       gazeRef,
       gazeConfidenceRef,
       gazeSampleSeqRef,
@@ -2422,8 +2418,204 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
     if (onToggleMouseFallback) {
       onToggleMouseFallback();
     } else {
-      setLocalMouseFallback((prev) => !prev);
+      setLocalMouseFallback((prev) => {
+        const next = !prev;
+        localMouseFallbackRef.current = next;
+        return next;
+      });
     }
+  };
+
+  const renderCognitoSyncStatus = () => {
+    if (completionState === 'SAVING') {
+      return (
+        <div className="flex items-center gap-2">
+          <Loader2 size={14} className="animate-spin text-[#8AE2D6]" />
+          <span>Sincronizando telemetría y cierre de sesión clínica...</span>
+        </div>
+      );
+    }
+
+    if (completionState === 'PENDING_SYNC') {
+      const unresolvedTrials = syncSummary.pendingTrials + syncSummary.uncertainTrials;
+      const rejectedOrDroppedTelemetry =
+        syncSummary.permanentRejectedTelemetryBatches +
+        syncSummary.droppedOverflowTelemetryBatches;
+
+      return (
+        <div className="w-full space-y-2.5 text-left">
+          <div className="flex items-center gap-2 text-amber-300 font-bold">
+            <AlertTriangle size={15} className="shrink-0" />
+            <span>Sincronización pendiente antes de cerrar la sesión clínica</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-white/85">
+            <span>
+              Ensayos confirmados: <strong>{syncSummary.confirmedTrials}</strong>
+            </span>
+            <span>
+              Pendientes / inciertos: <strong>{unresolvedTrials}</strong>
+              {syncSummary.inFlightTrials > 0
+                ? ` (${syncSummary.inFlightTrials} en vuelo)`
+                : ''}
+            </span>
+            <span>
+              Rechazados permanentes (Analytics):{' '}
+              <strong>{syncSummary.failedPermanentTrials}</strong>
+            </span>
+            <span>
+              Lotes telemetría pendientes:{' '}
+              <strong>{syncSummary.pendingTelemetryBatches}</strong>
+              {syncSummary.bufferedTelemetrySamples > 0
+                ? ` (+${syncSummary.bufferedTelemetrySamples} muestras en búfer)`
+                : ''}
+            </span>
+            <span>
+              Aceptados por broker (202 Kafka):{' '}
+              <strong>{syncSummary.brokerAcceptedTelemetryBatches}</strong>
+            </span>
+            <span>
+              Telemetría rechazada permanente / desbordada:{' '}
+              <strong>{rejectedOrDroppedTelemetry}</strong>
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => void runCloseSessionFlow(false)}
+              className="px-3 py-1.5 rounded-lg bg-[#26A69A] hover:bg-[#1E8A80] text-[#0E1722] font-bold text-xs transition-colors"
+            >
+              Reintentar sincronización y cerrar sesión
+            </button>
+            <button
+              type="button"
+              onClick={() => void runCloseSessionFlow(true)}
+              className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white border border-white/20 font-semibold text-xs transition-colors"
+            >
+              Cerrar sesión clínica de todas formas
+            </button>
+          </div>
+          <p className="text-[10px] text-white/65 leading-relaxed">
+            Nota: las colas son en memoria (mejor esfuerzo y no sobreviven recarga). HTTP 202
+            (BROKER_ACCEPTED) confirma recepción en Kafka, no persistencia final en TimescaleDB ni
+            cierre de Analytics.
+          </p>
+        </div>
+      );
+    }
+
+    if (completionState === 'ERROR') {
+      return (
+        <div className="w-full space-y-2 text-left">
+          <div className="flex items-center gap-2 text-red-300 font-bold">
+            <AlertTriangle size={15} className="shrink-0" />
+            <span>{backendWarning || 'Error al cerrar la sesión clínica.'}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => void runCloseSessionFlow(true)}
+            className="px-3 py-1.5 rounded-lg bg-red-500/80 hover:bg-red-500 text-white font-bold text-xs transition-colors"
+          >
+            Reintentar cierre clínico
+          </button>
+        </div>
+      );
+    }
+
+    if (completionState === 'FINISHED' || completionState === 'ABANDONED') {
+      const closedStatusLabel =
+        completionState === 'FINISHED' ? 'COMPLETED' : 'ABANDONED';
+      const hasIncompleteOrLostData =
+        syncSummary.hasPermanentDataLoss || syncSummary.hasPendingOrUncertainDelivery;
+
+      if (hasIncompleteOrLostData) {
+        return (
+          <div
+            className={`w-full space-y-2 text-left rounded-lg p-3 border ${
+              syncSummary.hasPermanentDataLoss
+                ? 'bg-red-950/45 border-red-400/50'
+                : 'bg-amber-950/40 border-amber-400/40'
+            }`}
+          >
+            <div className="flex items-start gap-2 text-amber-300 font-bold">
+              <AlertTriangle size={15} className="shrink-0 mt-0.5 text-red-400" />
+              <span>
+                Sesión registrada como <strong>{closedStatusLabel}</strong> — Sincronización
+                incompleta (datos no confirmados o perdidos)
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-white/85">
+              <span>
+                Ensayos confirmados: <strong>{syncSummary.confirmedTrials}</strong>
+              </span>
+              <span>
+                Rechazados permanentes (Analytics):{' '}
+                <strong>{syncSummary.failedPermanentTrials}</strong>
+              </span>
+              <span>
+                Pendientes/inciertos:{' '}
+                <strong>{syncSummary.pendingTrials + syncSummary.uncertainTrials}</strong>
+              </span>
+              <span>
+                Lotes broker 202 (Kafka):{' '}
+                <strong>{syncSummary.brokerAcceptedTelemetryBatches}</strong>
+              </span>
+              <span className="sm:col-span-2">
+                Lotes telemetría rechazados (perm.) / desbordados:{' '}
+                <strong>
+                  {syncSummary.permanentRejectedTelemetryBatches} /{' '}
+                  {syncSummary.droppedOverflowTelemetryBatches}
+                </strong>
+                {(syncSummary.pendingTelemetryBatches > 0 ||
+                  syncSummary.bufferedTelemetrySamples > 0) &&
+                  ` · Telemetría pendiente/búfer: ${syncSummary.pendingTelemetryBatches} lotes / ${syncSummary.bufferedTelemetrySamples} muestras`}
+              </span>
+            </div>
+            {syncSummary.uncertainTrials > 0 && (
+              <div className="pt-0.5">
+                <button
+                  type="button"
+                  onClick={() => void deliveryControllerRef.current?.drainPendingTrials(1)}
+                  className="px-2.5 py-1 rounded-md bg-amber-500/25 border border-amber-400/40 text-amber-200 font-semibold text-[11px] hover:bg-amber-500/35"
+                >
+                  Confirmar ensayos inciertos (ALREADY_STORED)
+                </button>
+              </div>
+            )}
+            <p className="text-[10px] text-amber-100/75 leading-relaxed">
+              Los rechazos permanentes no se reintentan automáticamente y los lotes desbordados por
+              capacidad no pueden recuperarse localmente. La entrega del cliente es en memoria (mejor
+              esfuerzo): HTTP 202 (BROKER_ACCEPTED) confirma recepción en Kafka, no persistencia
+              final en base de datos.
+            </p>
+          </div>
+        );
+      }
+
+      if (syncSummary.isSyncComplete) {
+        return (
+          <div className="w-full space-y-1.5 text-center">
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              {completionState === 'FINISHED' ? (
+                <CheckCircle size={14} className="text-[#26A69A]" />
+              ) : (
+                <AlertTriangle size={14} className="text-amber-400" />
+              )}
+              <span>
+                Sesión registrada como <strong>{closedStatusLabel}</strong> · Ensayos confirmados:{' '}
+                <strong>{syncSummary.confirmedTrials}</strong> · Lotes aceptados en broker (202
+                Kafka): <strong>{syncSummary.brokerAcceptedTelemetryBatches}</strong>
+              </span>
+            </div>
+            <p className="text-[10px] text-white/65 leading-relaxed">
+              Entrega del cliente en memoria (mejor esfuerzo); HTTP 202 (BROKER_ACCEPTED) confirma
+              recepción en el broker Kafka, no persistencia final en base de datos.
+            </p>
+          </div>
+        );
+      }
+    }
+
+    return <span>Estado de envío: {completionState}</span>;
   };
 
   return (
@@ -2531,91 +2723,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
             {/* Cognito persistence badge */}
             {(isCognitoSession || sessionHadCognitoRef.current) && (
               <div className="bg-white/10 border border-white/15 rounded-xl px-4 py-3 text-xs flex flex-col items-center justify-center gap-2">
-                {completionState === 'SAVING' ? (
-                  <div className="flex items-center gap-2">
-                    <Loader2 size={14} className="animate-spin text-[#8AE2D6]" />
-                    <span>Sincronizando telemetría y cierre de sesión clínica...</span>
-                  </div>
-                ) : completionState === 'PENDING_SYNC' ? (
-                  <div className="w-full space-y-2.5 text-left">
-                    <div className="flex items-center gap-2 text-amber-300 font-bold">
-                      <AlertTriangle size={15} className="shrink-0" />
-                      <span>Sincronización pendiente antes de cerrar la sesión clínica</span>
-                    </div>
-                    <p className="text-[11px] text-white/80">
-                      Confirmados: <strong>{syncSummary.confirmedTrials}</strong> · Inciertos/Pendientes:{' '}
-                      <strong>{syncSummary.uncertainTrials + syncSummary.pendingTrials}</strong> · Fallidos:{' '}
-                      <strong>{syncSummary.failedTrials}</strong> · Lotes telemetría pendientes:{' '}
-                      <strong>{syncSummary.pendingTelemetryBatches}</strong>
-                    </p>
-                    <div className="flex flex-wrap gap-2 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => void runCloseSessionFlow(false)}
-                        className="px-3 py-1.5 rounded-lg bg-[#26A69A] hover:bg-[#1E8A80] text-[#0E1722] font-bold text-xs transition-colors"
-                      >
-                        Reintentar sincronización y cerrar sesión
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void runCloseSessionFlow(true)}
-                        className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white border border-white/20 font-semibold text-xs transition-colors"
-                      >
-                        Cerrar sesión clínica de todas formas
-                      </button>
-                    </div>
-                  </div>
-                ) : completionState === 'ERROR' ? (
-                  <div className="w-full space-y-2 text-left">
-                    <div className="flex items-center gap-2 text-red-300 font-bold">
-                      <AlertTriangle size={15} className="shrink-0" />
-                      <span>{backendWarning || 'Error al cerrar la sesión clínica.'}</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void runCloseSessionFlow(true)}
-                      className="px-3 py-1.5 rounded-lg bg-red-500/80 hover:bg-red-500 text-white font-bold text-xs transition-colors"
-                    >
-                      Reintentar cierre clínico
-                    </button>
-                  </div>
-                ) : completionState === 'FINISHED' ? (
-                  <div className="flex flex-wrap items-center justify-center gap-2">
-                    <CheckCircle size={14} className="text-[#26A69A]" />
-                    <span>
-                      Sesión registrada como <strong>COMPLETED</strong> · Ensayos enviados:{' '}
-                      {trialsSubmittedCount}
-                    </span>
-                    {syncSummary.uncertainTrials > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => void trialAnalyticsQueueRef.current?.drainPending(1)}
-                        className="px-2.5 py-1 rounded-md bg-amber-500/25 border border-amber-400/40 text-amber-200 font-semibold text-[11px] hover:bg-amber-500/35"
-                      >
-                        Confirmar ensayos inciertos (ALREADY_STORED)
-                      </button>
-                    )}
-                  </div>
-                ) : completionState === 'ABANDONED' ? (
-                  <div className="flex flex-wrap items-center justify-center gap-2">
-                    <AlertTriangle size={14} className="text-amber-400" />
-                    <span>
-                      Meta no alcanzada; sesión guardada como <strong>ABANDONED</strong> · Ensayos:{' '}
-                      {trialsSubmittedCount}
-                    </span>
-                    {syncSummary.uncertainTrials > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => void trialAnalyticsQueueRef.current?.drainPending(1)}
-                        className="px-2.5 py-1 rounded-md bg-amber-500/25 border border-amber-400/40 text-amber-200 font-semibold text-[11px] hover:bg-amber-500/35"
-                      >
-                        Confirmar ensayos inciertos (ALREADY_STORED)
-                      </button>
-                    )}
-                  </div>
-                ) : (
-                  <span>Estado de envío: {completionState}</span>
-                )}
+                {renderCognitoSyncStatus()}
               </div>
             )}
 

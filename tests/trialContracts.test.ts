@@ -20,7 +20,10 @@ import {
   stepSustainedFixationTrial,
   stepVisualSearchTrial,
 } from '../src/infrastructure/therapy/modules/visualSearchAndFixationEngine.ts';
-import type { AnalyticsDataOrigin } from '../src/infrastructure/api/contracts/analytics.contracts.ts';
+import type {
+  AnalyticsDataOrigin,
+  SystematicExplorationTrialBody,
+} from '../src/infrastructure/api/contracts/analytics.contracts.ts';
 import type {
   FixationParameters,
   VisualScanningParameters,
@@ -725,6 +728,173 @@ describe('Trial Contracts (Java backend decoder + domain mirror)', () => {
         assert.equal(result.outcome, 'INTERRUPTED');
         assert.ok(result.elapsedMs < params.maximumFixationMs);
         validateSustainedFixationContract(result, params, origin);
+      }
+    }
+  });
+
+  it('SYSTEMATIC_EXPLORATION matches the exact 9 baseline bodies and scales dynamically with non-fixture frozen config', () => {
+    function produceExplorationBody(
+      params: VisualScanningParameters,
+      origin: AnalyticsDataOrigin,
+      targetVisits: number,
+      outcome: 'COMPLETED' | 'TIMED_OUT' | 'INTERRUPTED',
+      interruptAfterMs = 230
+    ): SystematicExplorationTrialBody {
+      const dt = 10;
+      const state = createSystematicExplorationTrial(params, 800, 600, targetVisits);
+      let completedBody: SystematicExplorationTrialBody | null = null;
+
+      while (state.visits.length < targetVisits) {
+        const wp = state.waypoints[state.currentStepIndex];
+        const res = stepSystematicExplorationTrial(
+          state,
+          { x: wp.x, y: wp.y },
+          dt,
+          params,
+          true,
+          dt,
+          origin
+        );
+        if (res) {
+          completedBody = res;
+          break;
+        }
+      }
+
+      if (outcome === 'COMPLETED') {
+        assert.ok(completedBody !== null);
+        return completedBody;
+      }
+
+      assert.equal(completedBody, null);
+
+      if (outcome === 'TIMED_OUT') {
+        const maxSteps = Math.ceil(params.maximumStimulusDurationMs / dt) + 5;
+        for (let step = 0; step < maxSteps; step++) {
+          const res = stepSystematicExplorationTrial(
+            state,
+            { x: -100, y: -100 },
+            dt,
+            params,
+            true,
+            dt,
+            origin
+          );
+          if (res) {
+            return res;
+          }
+        }
+        assert.fail('Expected TIMED_OUT body');
+      }
+
+      const interruptSteps = Math.round(interruptAfterMs / dt);
+      for (let step = 0; step < interruptSteps; step++) {
+        const res = stepSystematicExplorationTrial(
+          state,
+          { x: -100, y: -100 },
+          dt,
+          params,
+          true,
+          dt,
+          origin
+        );
+        assert.equal(res, null);
+      }
+
+      return interruptSystematicExplorationTrial(state, params, origin);
+    }
+
+    const baselineFrozenParams: VisualScanningParameters = {
+      mode: 'SYSTEMATIC_EXPLORATION',
+      affectedHemifield: 'LEFT',
+      minimumFixationMs: 300,
+      maximumStimulusDurationMs: 2500,
+      eccentricityDegrees: 20,
+      targetSizePx: 68,
+      repetitions: 4,
+      interStimulusIntervalMs: 750,
+      difficultyLevel: 2,
+    };
+
+    const expectedNineCases: readonly {
+      outcome: 'COMPLETED' | 'TIMED_OUT' | 'INTERRUPTED';
+      visits: number;
+      expectedElapsedMs: number;
+    }[] = [
+      { outcome: 'COMPLETED', visits: 4, expectedElapsedMs: 1200 },
+      { outcome: 'TIMED_OUT', visits: 0, expectedElapsedMs: 2500 },
+      { outcome: 'TIMED_OUT', visits: 1, expectedElapsedMs: 2800 },
+      { outcome: 'TIMED_OUT', visits: 2, expectedElapsedMs: 3100 },
+      { outcome: 'TIMED_OUT', visits: 3, expectedElapsedMs: 3400 },
+      { outcome: 'INTERRUPTED', visits: 0, expectedElapsedMs: 230 },
+      { outcome: 'INTERRUPTED', visits: 1, expectedElapsedMs: 530 },
+      { outcome: 'INTERRUPTED', visits: 2, expectedElapsedMs: 830 },
+      { outcome: 'INTERRUPTED', visits: 3, expectedElapsedMs: 1130 },
+    ];
+
+    for (const origin of DATA_ORIGINS) {
+      for (const spec of expectedNineCases) {
+        const body = produceExplorationBody(
+          baselineFrozenParams,
+          origin,
+          spec.visits,
+          spec.outcome,
+          230
+        );
+        assert.equal(body.outcome, spec.outcome);
+        assert.equal(body.elapsedMs, spec.expectedElapsedMs);
+        assert.deepEqual(
+          body.visits.map((v) => v.quadrant),
+          CANONICAL_EXPLORATION_QUADRANTS.slice(0, spec.visits)
+        );
+        for (const visit of body.visits) {
+          assert.equal(visit.timeToVisitMs, 300);
+          assert.equal(visit.confirmedDwellMs, 300);
+        }
+        validateSystematicExplorationContract(body, baselineFrozenParams, origin);
+      }
+
+      // Non-fixture frozen configuration: confirm dynamic calculation from session config
+      const customFrozenParams: VisualScanningParameters = {
+        ...baselineFrozenParams,
+        minimumFixationMs: 450,
+        maximumStimulusDurationMs: 3000,
+      };
+      const customCases: readonly {
+        outcome: 'COMPLETED' | 'TIMED_OUT' | 'INTERRUPTED';
+        visits: number;
+        expectedElapsedMs: number;
+      }[] = [
+        { outcome: 'COMPLETED', visits: 4, expectedElapsedMs: 4 * 450 },
+        { outcome: 'TIMED_OUT', visits: 0, expectedElapsedMs: 3000 },
+        { outcome: 'TIMED_OUT', visits: 1, expectedElapsedMs: 450 + 3000 },
+        { outcome: 'TIMED_OUT', visits: 2, expectedElapsedMs: 900 + 3000 },
+        { outcome: 'TIMED_OUT', visits: 3, expectedElapsedMs: 1350 + 3000 },
+        { outcome: 'INTERRUPTED', visits: 0, expectedElapsedMs: 230 },
+        { outcome: 'INTERRUPTED', visits: 1, expectedElapsedMs: 450 + 230 },
+        { outcome: 'INTERRUPTED', visits: 2, expectedElapsedMs: 900 + 230 },
+        { outcome: 'INTERRUPTED', visits: 3, expectedElapsedMs: 1350 + 230 },
+      ];
+
+      for (const spec of customCases) {
+        const body = produceExplorationBody(
+          customFrozenParams,
+          origin,
+          spec.visits,
+          spec.outcome,
+          230
+        );
+        assert.equal(body.outcome, spec.outcome);
+        assert.equal(body.elapsedMs, spec.expectedElapsedMs);
+        assert.deepEqual(
+          body.visits.map((v) => v.quadrant),
+          CANONICAL_EXPLORATION_QUADRANTS.slice(0, spec.visits)
+        );
+        for (const visit of body.visits) {
+          assert.equal(visit.timeToVisitMs, 450);
+          assert.equal(visit.confirmedDwellMs, 450);
+        }
+        validateSystematicExplorationContract(body, customFrozenParams, origin);
       }
     }
   });

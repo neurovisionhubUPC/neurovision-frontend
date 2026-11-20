@@ -220,6 +220,10 @@ export const SeriousGamesPage: React.FC = () => {
   const [startingSessionKey, setStartingSessionKey] = useState<string | null>(null);
   const [sessionProgress, setSessionProgress] = useState<PatientSessionProgressResponse | null>(null);
   const [mouseFallbackEnabled, setMouseFallbackEnabled] = useState(false);
+  const mouseFallbackEnabledRef = useRef(mouseFallbackEnabled);
+  useEffect(() => {
+    mouseFallbackEnabledRef.current = mouseFallbackEnabled;
+  }, [mouseFallbackEnabled]);
   const [expiredSession, setExpiredSession] = useState<PatientTherapySessionResponse | null>(null);
 
   const prescribedMode: ReportMode | null = useMemo(() => {
@@ -543,13 +547,13 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
       } else if (!results?.rawMetrics) {
         gazeIsBlinkingRef.current = false;
         gazeConfidenceRef.current = 0.0;
-        if (debugRef.current && !mouseFallbackEnabled) {
+        if (debugRef.current && !mouseFallbackEnabledRef.current) {
           debugRef.current.innerText =
             'STATUS: ROSTRO/MIRADA NO DETECTADA\nReubíquese frente a la cámara para reanudar el seguimiento ocular.';
         }
       }
     },
-    [smooth, calibrationData, addSample, mouseFallbackEnabled]
+    [smooth, calibrationData, addSample]
   );
 
   const { processVideoFrame, isReady, isLoaded } = useMediaPipeWorker(handleWorkerResults);
@@ -560,11 +564,11 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
     if (videoRef.current && isStreaming && isReady()) {
       processVideoFrame(videoRef.current, now);
     }
-    if (!mouseFallbackEnabled && (!isStreaming || now - lastValidGazePerfRef.current > MAX_GAZE_STALENESS_MS)) {
+    if (!mouseFallbackEnabledRef.current && (!isStreaming || now - lastValidGazePerfRef.current > MAX_GAZE_STALENESS_MS)) {
       gazeConfidenceRef.current = 0.0;
     }
     frameRequestRef.current = requestAnimationFrame(captureLoop);
-  }, [isStreaming, isReady, processVideoFrame, videoRef, mouseFallbackEnabled]);
+  }, [isStreaming, isReady, processVideoFrame, videoRef]);
 
   useEffect(() => {
     if (calibrationData) {

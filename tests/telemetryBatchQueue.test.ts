@@ -2,12 +2,16 @@ import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  ApiError,
   registerAccessTokenGetter,
   registerAccessTokenRefresher,
 } from '../src/infrastructure/api/httpClient.ts';
 import { telemetryApi } from '../src/infrastructure/api/telemetryApi.ts';
 import type { TelemetryBatchBody } from '../src/infrastructure/api/contracts/telemetry.contracts.ts';
-import { TelemetryBatchQueue } from '../src/infrastructure/telemetry/telemetryBatchQueue.ts';
+import {
+  TelemetryBatchQueue,
+  type TelemetryQueueSnapshot,
+} from '../src/infrastructure/telemetry/telemetryBatchQueue.ts';
 
 interface CapturedRequest {
   url: string;
@@ -431,5 +435,467 @@ describe('TelemetryBatchQueue (real telemetryApi + httpClient)', () => {
         `Expected strictly monotonic timestamp at index ${i}: ${effectiveTimestamps[i]} > ${effectiveTimestamps[i - 1]}`
       );
     }
+  });
+
+  it('7. RG-03: 4 overlapping flush() calls with newly recorded samples serialize into a single drain with zero duplicate sends', async () => {
+    let wallMs = 1_700_000_600_000;
+    let perfMs = 20_000;
+    const captured: CapturedRequest[] = [];
+
+    const deferredResponses: Array<(res: Response) => void> = [];
+    registerAccessTokenGetter(() => 'token-rg03');
+    globalThis.fetch = (url, init) => {
+      captured.push(captureRequest(url, init));
+      return new Promise<Response>((resolve) => {
+        deferredResponses.push(resolve);
+      });
+    };
+
+    const queue = new TelemetryBatchQueue({
+      therapySessionId: 'session-rg03',
+      initialStreamId: 'stream-rg03',
+      maxAttemptsPerFlush: 1,
+      retryBackoffMs: 0,
+      sendBatch: (body) => telemetryApi.sendTelemetryBatch(body),
+      nowMs: () => wallMs,
+      perfNowMs: () => perfMs,
+      sleep: async () => undefined,
+      uuid: createDeterministicUuid('brg03'),
+    });
+
+    // Batch 0 starts flushing and holds in-flight
+    queue.recordSample({ gaze: { x: 0.1, y: 0.1, confidence: 0.9 } });
+    const flush1 = queue.flush();
+    await new Promise((r) => setTimeout(r, 0));
+
+    assert.equal(captured.length, 1);
+    assert.equal(queue.getSnapshot().inFlightCount, 1);
+    assert.equal(queue.getSnapshot().pendingCount, 1);
+    assert.equal(queue.getSnapshot().bufferedSampleCount, 0);
+
+    // Record new sample -> overlap flush2, flush3, then another sample + flush4, flush5
+    wallMs += 50;
+    perfMs += 50;
+    queue.recordSample({ gaze: { x: 0.2, y: 0.2, confidence: 0.9 } });
+    assert.equal(queue.getSnapshot().bufferedSampleCount, 1);
+
+    const flush2 = queue.flush();
+    const flush3 = queue.flush();
+
+    wallMs += 50;
+    perfMs += 50;
+    queue.recordSample({ gaze: { x: 0.3, y: 0.3, confidence: 0.9 } });
+    const flush4 = queue.flush();
+    const flush5 = queue.flush();
+
+    await new Promise((r) => setTimeout(r, 0));
+    // Must still have ONLY batch 0 in-flight (never a second concurrent drain)
+    assert.equal(captured.length, 1);
+    assert.equal(deferredResponses.length, 1);
+    assert.equal(queue.getSnapshot().pendingCount, 3);
+    assert.equal(queue.getSnapshot().inFlightCount, 1);
+    assert.equal(queue.getSnapshot().bufferedSampleCount, 0);
+
+    // Settle batch 0 -> single drain owner advances to batch 1
+    deferredResponses[0](makeJsonResponse(202, { code: 'BROKER_ACCEPTED' }));
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(captured.length, 2);
+    assert.equal(captured[1].body.sequence, 1);
+    assert.equal(queue.getSnapshot().brokerAcceptedCount, 1);
+    assert.equal(queue.getSnapshot().inFlightCount, 1);
+
+    // Settle batch 1 -> single drain owner advances to batch 2
+    deferredResponses[1](makeJsonResponse(202, { code: 'BROKER_ACCEPTED' }));
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(captured.length, 3);
+    assert.equal(captured[2].body.sequence, 2);
+
+    // Settle batch 2
+    deferredResponses[2](makeJsonResponse(202, { code: 'BROKER_ACCEPTED' }));
+    await Promise.all([flush1, flush2, flush3, flush4, flush5]);
+
+    assert.equal(captured.length, 3);
+    assert.deepEqual(
+      captured.map((req) => req.body.sequence),
+      [0, 1, 2]
+    );
+    assert.equal(queue.getSnapshot().brokerAcceptedCount, 3);
+    assert.equal(queue.getSnapshot().pendingCount, 0);
+    assert.equal(queue.getSnapshot().inFlightCount, 0);
+    assert.equal(queue.getSnapshot().bufferedSampleCount, 0);
+    assert.equal(queue.hasPending(), false);
+  });
+
+  it('8. HTTP 413/415 permanent rejections and queue overflow surface hasPermanentDataLoss without retry', async () => {
+    let wallMs = 1_700_000_700_000;
+    let perfMs = 30_000;
+    const captured: CapturedRequest[] = [];
+
+    registerAccessTokenGetter(() => 'token-perm');
+    let callIdx = 0;
+    globalThis.fetch = async (url, init) => {
+      captured.push(captureRequest(url, init));
+      callIdx += 1;
+      if (callIdx === 1) {
+        return makeJsonResponse(413, { code: 'PAYLOAD_TOO_LARGE', message: 'Batch too big' });
+      }
+      if (callIdx === 2) {
+        return makeJsonResponse(415, {
+          code: 'UNSUPPORTED_MEDIA_TYPE',
+          message: 'Bad media type',
+        });
+      }
+      return makeJsonResponse(202, { code: 'BROKER_ACCEPTED' });
+    };
+
+    const queue = new TelemetryBatchQueue({
+      therapySessionId: 'session-perm',
+      initialStreamId: 'stream-perm',
+      maxAttemptsPerFlush: 3,
+      retryBackoffMs: 0,
+      sendBatch: (body) => telemetryApi.sendTelemetryBatch(body),
+      nowMs: () => wallMs,
+      perfNowMs: () => perfMs,
+      sleep: async () => undefined,
+      uuid: createDeterministicUuid('bperm'),
+    });
+
+    queue.recordSample({ gaze: { x: 0.1, y: 0.1, confidence: 0.9 } });
+    await queue.flush();
+    assert.equal(captured.length, 1);
+    assert.equal(queue.getSnapshot().permanentRejectedCount, 1);
+    assert.equal(queue.getSnapshot().hasPermanentDataLoss, true);
+    assert.equal(queue.getSnapshot().pendingCount, 0);
+    assert.equal(queue.getSnapshot().inFlightCount, 0);
+    assert.equal(queue.hasPending(), false);
+    assert.ok(queue.getSnapshot().lastWarning?.includes('413'));
+
+    wallMs += 100;
+    perfMs += 100;
+    queue.recordSample({ gaze: { x: 0.2, y: 0.2, confidence: 0.9 } });
+    await queue.flush();
+    assert.equal(captured.length, 2);
+    assert.equal(queue.getSnapshot().permanentRejectedCount, 2);
+    assert.equal(queue.getSnapshot().hasPermanentDataLoss, true);
+    assert.ok(queue.getSnapshot().lastWarning?.includes('415'));
+
+    // Subsequent accepted batch still retains hasPermanentDataLoss = true
+    wallMs += 100;
+    perfMs += 100;
+    queue.recordSample({ gaze: { x: 0.3, y: 0.3, confidence: 0.9 } });
+    await queue.flush();
+    assert.equal(captured.length, 3);
+    assert.equal(queue.getSnapshot().brokerAcceptedCount, 1);
+    assert.equal(queue.getSnapshot().permanentRejectedCount, 2);
+    assert.equal(queue.getSnapshot().hasPermanentDataLoss, true);
+
+    // Overflow alone also sets hasPermanentDataLoss = true
+    const overflowQueue = new TelemetryBatchQueue({
+      therapySessionId: 'session-overflow',
+      maxQueueSize: 1,
+      sendBatch: (body) => telemetryApi.sendTelemetryBatch(body),
+      nowMs: () => wallMs,
+      perfNowMs: () => perfMs,
+      uuid: createDeterministicUuid('bovf'),
+    });
+    overflowQueue.recordSample({ gaze: { x: 0.1, y: 0.1, confidence: 0.9 } });
+    overflowQueue.enqueueBuffers();
+    overflowQueue.recordSample({ gaze: { x: 0.2, y: 0.2, confidence: 0.9 } });
+    assert.equal(overflowQueue.enqueueBuffers(), 0);
+    assert.equal(overflowQueue.getSnapshot().droppedOverflowCount, 1);
+    assert.equal(overflowQueue.getSnapshot().hasPermanentDataLoss, true);
+  });
+
+  it('9. rotateStream() while batch 0 is inFlight preserves old-stream batches and starts new stream at sequence 0', async () => {
+    let wallMs = 1_700_000_800_000;
+    let perfMs = 40_000;
+    const captured: CapturedRequest[] = [];
+    const deferredResponses: Array<(res: Response) => void> = [];
+
+    registerAccessTokenGetter(() => 'token-rotate');
+    globalThis.fetch = (url, init) => {
+      captured.push(captureRequest(url, init));
+      return new Promise<Response>((resolve) => {
+        deferredResponses.push(resolve);
+      });
+    };
+
+    const queue = new TelemetryBatchQueue({
+      therapySessionId: 'session-rotate',
+      initialStreamId: 'stream-rot-0',
+      maxAttemptsPerFlush: 1,
+      retryBackoffMs: 0,
+      sendBatch: (body) => telemetryApi.sendTelemetryBatch(body),
+      nowMs: () => wallMs,
+      perfNowMs: () => perfMs,
+      sleep: async () => undefined,
+      uuid: createDeterministicUuid('rot'),
+    });
+
+    // Batch 0 on stream-rot-0 goes inFlight
+    queue.recordSample({ gaze: { x: 0.1, y: 0.1, confidence: 0.9 } });
+    const flush1 = queue.flush();
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(captured.length, 1);
+    assert.equal(queue.getSnapshot().inFlightCount, 1);
+
+    // Sample 1 buffered on stream-rot-0 before rotation
+    wallMs += 50;
+    perfMs += 50;
+    queue.recordSample({ gaze: { x: 0.2, y: 0.2, confidence: 0.9 } });
+
+    const rotatePromise = queue.rotateStream();
+    const rotatedStreamId = queue.getSnapshot().streamId;
+    assert.notEqual(rotatedStreamId, 'stream-rot-0');
+    assert.equal(queue.getSnapshot().nextSequence, 0);
+    assert.equal(queue.getSnapshot().pendingCount, 2);
+    assert.equal(queue.getSnapshot().bufferedSampleCount, 0);
+    assert.equal(captured.length, 1);
+
+    // Sample 2 recorded on rotated stream
+    wallMs += 50;
+    perfMs += 50;
+    queue.recordSample({ gaze: { x: 0.3, y: 0.3, confidence: 0.9 } });
+    const flush2 = queue.flush();
+
+    // Settle batch 0, batch 1, batch 2 sequentially
+    deferredResponses[0](makeJsonResponse(202, { code: 'BROKER_ACCEPTED' }));
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(captured.length, 2);
+
+    deferredResponses[1](makeJsonResponse(202, { code: 'BROKER_ACCEPTED' }));
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(captured.length, 3);
+
+    deferredResponses[2](makeJsonResponse(202, { code: 'BROKER_ACCEPTED' }));
+    await Promise.all([flush1, rotatePromise, flush2]);
+
+    assert.equal(captured.length, 3);
+    assert.equal(captured[0].body.streamId, 'stream-rot-0');
+    assert.equal(captured[0].body.sequence, 0);
+    assert.equal(captured[0].body.gazeSamples[0].x, 0.1);
+
+    assert.equal(captured[1].body.streamId, 'stream-rot-0');
+    assert.equal(captured[1].body.sequence, 1);
+    assert.equal(captured[1].body.gazeSamples[0].x, 0.2);
+
+    assert.equal(captured[2].body.streamId, rotatedStreamId);
+    assert.equal(captured[2].body.sequence, 0);
+    assert.equal(captured[2].body.gazeSamples[0].x, 0.3);
+
+    assert.ok(Date.parse(captured[2].body.capturedAt) > Date.parse(captured[1].body.capturedAt));
+    assert.equal(queue.getSnapshot().brokerAcceptedCount, 3);
+    assert.equal(queue.getSnapshot().pendingCount, 0);
+  });
+
+  it('10. dispose() and reset() isolate in-flight HTTP settlements without post-disposal callbacks or cross-session corruption', async () => {
+    let wallMs = 1_700_000_900_000;
+    let perfMs = 50_000;
+
+    // Part A: dispose() suppresses late 202 and late 400 callbacks/mutations
+    const snapshotsA: TelemetryQueueSnapshot[] = [];
+    let resolveInFlightA!: (res: { code: 'BROKER_ACCEPTED' }) => void;
+    let sendCountA = 0;
+
+    const queueA = new TelemetryBatchQueue({
+      therapySessionId: 'session-disp-a',
+      initialStreamId: 'stream-disp-a',
+      maxAttemptsPerFlush: 1,
+      retryBackoffMs: 0,
+      sendBatch: () => {
+        sendCountA += 1;
+        return new Promise((resolve) => {
+          resolveInFlightA = resolve;
+        });
+      },
+      nowMs: () => wallMs,
+      perfNowMs: () => perfMs,
+      sleep: async () => undefined,
+      uuid: createDeterministicUuid('dispA'),
+      onStateChange: (snap) => snapshotsA.push(snap),
+    });
+
+    queueA.recordSample({ gaze: { x: 0.1, y: 0.1, confidence: 0.9 } });
+    const flushA = queueA.flush();
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(queueA.getSnapshot().inFlightCount, 1);
+
+    queueA.dispose();
+    const callbackCountAtDispose = snapshotsA.length;
+    const snapAtDispose = queueA.getSnapshot();
+
+    // Post-disposal mutations and drains must be no-ops
+    queueA.recordSample({ gaze: { x: 0.2, y: 0.2, confidence: 0.9 } });
+    assert.equal(queueA.enqueueBuffers(), 0);
+    assert.equal(
+      queueA.enqueueCustomBatch([{ offsetMs: 0, x: 0.2, y: 0.2, confidence: 0.9 }], []),
+      null
+    );
+    await queueA.flush();
+    await queueA.rotateStream();
+    assert.equal(sendCountA, 1);
+
+    resolveInFlightA({ code: 'BROKER_ACCEPTED' });
+    await flushA;
+    await new Promise((r) => setTimeout(r, 0));
+
+    assert.equal(snapshotsA.length, callbackCountAtDispose);
+    assert.deepEqual(queueA.getSnapshot(), snapAtDispose);
+    assert.equal(queueA.getSnapshot().brokerAcceptedCount, 0);
+
+    // Part B: reset() while old session batch is in-flight prevents late 400 from corrupting new session
+    let rejectOldSession!: (err: unknown) => void;
+    let resolveNewSession!: (res: { code: 'BROKER_ACCEPTED' }) => void;
+    const sentSessions: string[] = [];
+
+    const queueB = new TelemetryBatchQueue({
+      therapySessionId: 'session-old',
+      initialStreamId: 'stream-old',
+      maxAttemptsPerFlush: 1,
+      retryBackoffMs: 0,
+      sendBatch: (body) => {
+        sentSessions.push(body.therapySessionId);
+        if (body.therapySessionId === 'session-old') {
+          return new Promise((_, reject) => {
+            rejectOldSession = reject;
+          });
+        }
+        return new Promise((resolve) => {
+          resolveNewSession = resolve;
+        });
+      },
+      nowMs: () => wallMs,
+      perfNowMs: () => perfMs,
+      sleep: async () => undefined,
+      uuid: createDeterministicUuid('rst'),
+    });
+
+    queueB.recordSample({ gaze: { x: 0.1, y: 0.1, confidence: 0.9 } });
+    const flushOld = queueB.flush();
+    await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual(sentSessions, ['session-old']);
+
+    queueB.reset('session-new');
+    wallMs += 100;
+    perfMs += 100;
+    queueB.recordSample({ gaze: { x: 0.4, y: 0.4, confidence: 0.9 } });
+    const flushNew = queueB.flush();
+    await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual(sentSessions, ['session-old', 'session-new']);
+
+    resolveNewSession({ code: 'BROKER_ACCEPTED' });
+    await flushNew;
+
+    rejectOldSession(new ApiError(400, 'INVALID_SESSION', 'Old session rejected'));
+    await flushOld;
+
+    const finalSnap = queueB.getSnapshot();
+    assert.equal(finalSnap.brokerAcceptedCount, 1);
+    assert.equal(finalSnap.permanentRejectedCount, 0);
+    assert.equal(finalSnap.pendingCount, 0);
+    assert.equal(finalSnap.inFlightCount, 0);
+    assert.equal(finalSnap.lastWarning, null);
+    assert.equal(finalSnap.hasPermanentDataLoss, false);
+  });
+
+  it('11. 5 simultaneous flush() calls after a failed 503 drain keep max concurrency 1 per batchId and preserve exact Batch 0 body', async () => {
+    let wallMs = 1_700_000_950_000;
+    let perfMs = 60_000;
+
+    registerAccessTokenGetter(() => 'token-post503-concurrent');
+    globalThis.fetch = async () =>
+      makeJsonResponse(503, { code: 'TELEMETRY_INGESTION_UNAVAILABLE' });
+
+    const queue = new TelemetryBatchQueue({
+      therapySessionId: 'session-503-concurrent',
+      initialStreamId: 'stream-503-concurrent',
+      maxAttemptsPerFlush: 1,
+      retryBackoffMs: 0,
+      sendBatch: (body) => telemetryApi.sendTelemetryBatch(body),
+      nowMs: () => wallMs,
+      perfNowMs: () => perfMs,
+      sleep: async () => undefined,
+      uuid: createDeterministicUuid('b503c'),
+    });
+
+    queue.recordSample({ gaze: { x: 0.15, y: 0.25, confidence: 0.9 } });
+    assert.equal(queue.enqueueBuffers(), 1);
+    wallMs += 100;
+    perfMs += 100;
+    queue.recordSample({ gaze: { x: 0.35, y: 0.45, confidence: 0.92 } });
+    assert.equal(queue.enqueueBuffers(), 1);
+
+    // Initial drain fails Batch 0 with 503, leaving both Batch 0 and Batch 1 pending
+    await queue.flush();
+    assert.equal(queue.getPendingBatches().length, 2);
+    assert.equal(queue.getPendingBatches()[0].lastStatusCode, 503);
+    assert.equal(queue.getSnapshot().pendingCount, 2);
+    assert.equal(queue.getSnapshot().brokerAcceptedCount, 0);
+
+    const batch0Snapshot = JSON.parse(
+      JSON.stringify(queue.getPendingBatches()[0].body)
+    ) as TelemetryBatchBody;
+    const batch1Id = queue.getPendingBatches()[1].body.batchId;
+
+    const retriedRequests: CapturedRequest[] = [];
+    const inFlightByBatchId = new Map<string, number>();
+    const maxConcurrencyByBatchId = new Map<string, number>();
+    const deferredResolvers: Array<(res: Response) => void> = [];
+
+    globalThis.fetch = async (url, init) => {
+      const req = captureRequest(url, init);
+      retriedRequests.push(req);
+      const batchId = req.body.batchId;
+      const active = (inFlightByBatchId.get(batchId) ?? 0) + 1;
+      inFlightByBatchId.set(batchId, active);
+      maxConcurrencyByBatchId.set(
+        batchId,
+        Math.max(maxConcurrencyByBatchId.get(batchId) ?? 0, active)
+      );
+      try {
+        return await new Promise<Response>((resolve) => {
+          deferredResolvers.push(resolve);
+        });
+      } finally {
+        inFlightByBatchId.set(batchId, (inFlightByBatchId.get(batchId) ?? 1) - 1);
+      }
+    };
+
+    // Fire 5 simultaneous flush() calls while Batch 0's retry HTTP promise is held open
+    wallMs += 5_000;
+    const simultaneousFlushes = Promise.all([
+      queue.flush(),
+      queue.flush(),
+      queue.flush(),
+      queue.flush(),
+      queue.flush(),
+    ]);
+
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(retriedRequests.length, 1);
+    assert.deepEqual(retriedRequests[0].body, batch0Snapshot);
+    assert.equal(retriedRequests[0].body.sentAt, batch0Snapshot.sentAt);
+    assert.equal(maxConcurrencyByBatchId.get(batch0Snapshot.batchId), 1);
+    assert.equal(maxConcurrencyByBatchId.get(batch1Id) ?? 0, 0);
+    assert.equal(queue.getSnapshot().inFlightCount, 1);
+    assert.equal(queue.getSnapshot().pendingCount, 2);
+
+    // Resolve Batch 0 (202) -> advances to Batch 1
+    deferredResolvers[0](makeJsonResponse(202, { code: 'BROKER_ACCEPTED' }));
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(retriedRequests.length, 2);
+    assert.equal(retriedRequests[1].body.batchId, batch1Id);
+    assert.equal(maxConcurrencyByBatchId.get(batch1Id), 1);
+
+    // Resolve Batch 1 (202)
+    deferredResolvers[1](makeJsonResponse(202, { code: 'BROKER_ACCEPTED' }));
+    await simultaneousFlushes;
+
+    assert.equal(retriedRequests.length, 2);
+    assert.equal(maxConcurrencyByBatchId.get(batch0Snapshot.batchId), 1);
+    assert.equal(maxConcurrencyByBatchId.get(batch1Id), 1);
+    assert.equal(queue.getSnapshot().brokerAcceptedCount, 2);
+    assert.equal(queue.getSnapshot().pendingCount, 0);
+    assert.equal(queue.getSnapshot().inFlightCount, 0);
   });
 });

@@ -1,5 +1,36 @@
-export const MAX_GAZE_STALENESS_MS = 150;
-export const MAX_DWELL_PER_REUSED_SAMPLE_MS = 100;
+/**
+ * Minimum sustained webcam inference rate (FPS) supported without triggering
+ * false staleness decay or fixation-loss penalties (`1000 / 4 = 250 ms` period).
+ */
+export const SUPPORTED_MIN_INFERENCE_FPS = 4;
+
+/**
+ * Maximum age (ms) of the latest valid webcam inference sample before gaze is
+ * treated as stale (`STALE_SAMPLE`).
+ *
+ * Clinical RG-01 balance: `280 ms` supports live inference down to 4 FPS
+ * (`250 ms` frame interval + `30 ms` scheduling/rAF jitter) with zero false
+ * decay or `fixationLosses`, while staying strictly below both the minimum
+ * clinical `minimumFixationMs` (`300 ms`) and `useMediaPipeWorker.ts`'s
+ * `300 ms` backpressure timeout watchdog.
+ */
+export const MAX_GAZE_STALENESS_MS = 280;
+
+/**
+ * Maximum fixation dwell (ms) that a single inference `sampleSeq` may credit
+ * across canvas animation frames (`REUSED_SAMPLE_CAPPED` once exhausted).
+ *
+ * Kept strictly below half of `300 ms` (`150 ms`):
+ * - 1 frozen sample credits at most `120 ms` (`< 250 ms` Compensatory Saccade
+ *   anchor / Visual Search distractor false-fixation threshold and `< 300 ms`
+ *   minimum clinical `minimumFixationMs`), then stops accumulating and decays to
+ *   `0` after `280 ms` (`STALE_SAMPLE`).
+ * - Even 2 samples at 4 FPS followed by a permanent freeze credit at most
+ *   `240 ms` (`< 250 ms < 300 ms`) before decaying to `0`, preventing any target
+ *   acquisition, saccade anchor unlock, or false distractor fixation.
+ */
+export const MAX_DWELL_PER_REUSED_SAMPLE_MS = 120;
+
 export const MIN_VALID_GAZE_CONFIDENCE = 0.35;
 
 export type GazeFreshnessReason =
