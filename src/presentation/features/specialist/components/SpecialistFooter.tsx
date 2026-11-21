@@ -18,36 +18,38 @@ export const SpecialistFooter: React.FC = () => {
 
   return (
     <>
-      <footer className="bg-[#E6F6FF] text-[#071E27] w-full py-6 px-6 lg:px-8 flex flex-col md:flex-row justify-between items-center gap-4 border-t border-[#071524]/10 mt-auto text-xs">
-        <div className="flex flex-col sm:flex-row items-center gap-2 text-center sm:text-left">
-          <span className="font-bold text-[#071524]">NeuroVisión Rehab</span>
-          <span className="text-[#44474C]">
-            © {new Date().getFullYear()} NeuroVisión Rehab. Clinical Accessibility Standards Compliant (ISO 13485 / Ley 29733 / WCAG 2.2 AAA).
-          </span>
-        </div>
+      <footer className="bg-[#E6F6FF] text-[#071E27] w-full py-6 px-4 lg:px-6 xl:px-8 border-t border-[#071524]/10 mt-auto text-xs">
+        <div className="max-w-[1536px] mx-auto w-full flex flex-col md:flex-row justify-between items-center gap-4">
+          <div className="flex flex-col sm:flex-row items-center gap-2 text-center sm:text-left">
+            <span className="font-bold text-[#071524]">NeuroVisión Rehab</span>
+            <span className="text-[#44474C]">
+              © {new Date().getFullYear()} NeuroVisión Rehab. Clinical Accessibility Standards Compliant (ISO 13485 / Ley 29733 / WCAG 2.2 AAA).
+            </span>
+          </div>
 
-        <div className="flex items-center gap-6 flex-wrap justify-center">
-          <button
-            type="button"
-            onClick={() => setActiveModal('privacy')}
-            className="text-[#44474C] hover:text-[#071524] hover:underline transition-colors cursor-pointer"
-          >
-            Privacy Policy
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveModal('terms')}
-            className="text-[#44474C] hover:text-[#071524] hover:underline transition-colors cursor-pointer"
-          >
-            Terms of Service
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveModal('accessibility')}
-            className="text-[#006A62] underline font-bold hover:text-[#005049] transition-colors cursor-pointer"
-          >
-            Accessibility Support
-          </button>
+          <div className="flex items-center gap-6 flex-wrap justify-center">
+            <button
+              type="button"
+              onClick={() => setActiveModal('privacy')}
+              className="text-[#44474C] hover:text-[#071524] hover:underline transition-colors cursor-pointer"
+            >
+              Privacy Policy
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveModal('terms')}
+              className="text-[#44474C] hover:text-[#071524] hover:underline transition-colors cursor-pointer"
+            >
+              Terms of Service
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveModal('accessibility')}
+              className="text-[#006A62] underline font-bold hover:text-[#005049] transition-colors cursor-pointer"
+            >
+              Accessibility Support
+            </button>
+          </div>
         </div>
       </footer>
 

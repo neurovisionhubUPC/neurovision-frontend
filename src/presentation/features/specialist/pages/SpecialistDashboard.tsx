@@ -457,7 +457,7 @@ export const SpecialistDashboard: React.FC = () => {
       <SubHeaderStrip />
 
       {/* Main Viewport Container */}
-      <main className="flex-1 max-w-[1440px] w-full mx-auto px-4 lg:px-6 xl:px-8 py-6 flex flex-col gap-5 sm:gap-6">
+      <main className="flex-1 max-w-[1536px] w-full mx-auto px-4 lg:px-6 xl:px-8 py-6 flex flex-col gap-5 sm:gap-6">
         {/* Page Title Bar */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 sm:gap-4">
           <div>

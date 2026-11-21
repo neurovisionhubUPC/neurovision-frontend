@@ -11,6 +11,16 @@ import {
   DEFAULT_PX_PER_CM,
   DEFAULT_VIEWING_DISTANCE_CM,
 } from '../retinotopicGeometry.ts';
+import {
+  accumulateEntityDwellWithContinuity,
+  createEntityDwellContinuityState,
+  resetEntityDwellContinuityState,
+  type EntityDwellContinuityState,
+  type GazeSampleContinuity,
+} from '../gazeFreshnessGuard.ts';
+
+export const DEFAULT_MIN_ANCHOR_TIMEOUT_MS = 4000;
+export const DEFAULT_MAX_ANCHOR_TIMEOUT_MS = 15000;
 
 export type ExplorationQuadrant = 'TOP_LEFT' | 'TOP_RIGHT' | 'BOTTOM_LEFT' | 'BOTTOM_RIGHT';
 
@@ -34,6 +44,7 @@ export interface ScanningEntity {
   meridianDeg: number;
   found: boolean;
   dwellTimeMs: number;
+  dwellContinuity?: EntityDwellContinuityState;
 }
 
 export interface ExplorationVisit {
@@ -70,6 +81,9 @@ export interface CompensatorySaccadeTrialState {
   anchor: ScanningEntity;
   peripheralTarget: ScanningEntity;
   anchorHoldRequiredMs: number;
+  anchorElapsedMs: number;
+  anchorTimeoutMs: number;
+  timedOutOnAnchor: boolean;
   saccadeElapsedMs: number;
   completed: boolean;
   outcome: 'SUCCESS' | 'TIMEOUT' | 'INTERRUPTED' | null;
@@ -168,6 +182,7 @@ export function createStandardScanningTrial(
       meridianDeg: meridianOffsetDeg,
       found: false,
       dwellTimeMs: 0,
+      dwellContinuity: createEntityDwellContinuityState(),
     },
     elapsedMs: 0,
     completed: false,
@@ -182,7 +197,8 @@ export function stepStandardScanningTrial(
   params: VisualScanningParameters,
   isGazeValid: boolean = true,
   dwellDeltaMs?: number,
-  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED'
+  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED',
+  sampleContinuity?: GazeSampleContinuity | null
 ): StandardScanningTrialBody | null {
   if (state.completed) return null;
 
@@ -196,7 +212,15 @@ export function stepStandardScanningTrial(
   const hovering = dist <= target.acceptanceRadius;
 
   if (hovering && isGazeValid) {
-    target.dwellTimeMs += effectiveDwellDelta;
+    if (!target.dwellContinuity) {
+      target.dwellContinuity = createEntityDwellContinuityState();
+    }
+    const creditedDwell = accumulateEntityDwellWithContinuity(
+      target.dwellContinuity,
+      effectiveDwellDelta,
+      sampleContinuity
+    );
+    target.dwellTimeMs = Math.min(state.elapsedMs, target.dwellTimeMs + creditedDwell);
     if (target.dwellTimeMs >= minFixMs) {
       target.found = true;
       state.completed = true;
@@ -221,6 +245,9 @@ export function stepStandardScanningTrial(
       };
     }
   } else {
+    if (target.dwellContinuity) {
+      resetEntityDwellContinuityState(target.dwellContinuity);
+    }
     target.dwellTimeMs = Math.max(0, target.dwellTimeMs - safeDeltaMs * 1.25);
   }
 
@@ -325,6 +352,7 @@ export function createSystematicExplorationTrial(
       meridianDeg: c.meridianDeg,
       found: false,
       dwellTimeMs: 0,
+      dwellContinuity: createEntityDwellContinuityState(),
     };
   });
 
@@ -348,7 +376,8 @@ export function stepSystematicExplorationTrial(
   params: VisualScanningParameters,
   isGazeValid: boolean = true,
   dwellDeltaMs?: number,
-  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED'
+  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED',
+  sampleContinuity?: GazeSampleContinuity | null
 ): SystematicExplorationTrialBody | null {
   if (state.completed) return null;
 
@@ -365,7 +394,18 @@ export function stepSystematicExplorationTrial(
     const hovering = dist <= activeWp.acceptanceRadius;
 
     if (hovering && isGazeValid) {
-      activeWp.dwellTimeMs += effectiveDwellDelta;
+      if (!activeWp.dwellContinuity) {
+        activeWp.dwellContinuity = createEntityDwellContinuityState();
+      }
+      const creditedDwell = accumulateEntityDwellWithContinuity(
+        activeWp.dwellContinuity,
+        effectiveDwellDelta,
+        sampleContinuity
+      );
+      activeWp.dwellTimeMs = Math.min(
+        state.currentQuadrantElapsedMs,
+        activeWp.dwellTimeMs + creditedDwell
+      );
       if (activeWp.dwellTimeMs >= minFixMs) {
         activeWp.found = true;
         const confirmedDwellMs = Math.min(
@@ -408,6 +448,9 @@ export function stepSystematicExplorationTrial(
         }
       }
     } else {
+      if (activeWp.dwellContinuity) {
+        resetEntityDwellContinuityState(activeWp.dwellContinuity);
+      }
       activeWp.dwellTimeMs = Math.max(0, activeWp.dwellTimeMs - safeDeltaMs * 1.25);
     }
   }
@@ -528,6 +571,7 @@ export function createCompensatorySaccadeTrial(
       meridianDeg: 0,
       found: false,
       dwellTimeMs: 0,
+      dwellContinuity: createEntityDwellContinuityState(),
     },
     peripheralTarget: {
       id: createUuid(),
@@ -540,8 +584,16 @@ export function createCompensatorySaccadeTrial(
       meridianDeg: meridianOffsetDeg,
       found: false,
       dwellTimeMs: 0,
+      dwellContinuity: createEntityDwellContinuityState(),
     },
     anchorHoldRequiredMs,
+    anchorElapsedMs: 0,
+    anchorTimeoutMs: clamp(
+      Math.round((params.maximumStimulusDurationMs || 2500) * 1.5),
+      DEFAULT_MIN_ANCHOR_TIMEOUT_MS,
+      DEFAULT_MAX_ANCHOR_TIMEOUT_MS
+    ),
+    timedOutOnAnchor: false,
     saccadeElapsedMs: 0,
     completed: false,
     outcome: null,
@@ -555,7 +607,8 @@ export function stepCompensatorySaccadeTrial(
   params: VisualScanningParameters,
   isGazeValid: boolean = true,
   dwellDeltaMs?: number,
-  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED'
+  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED',
+  sampleContinuity?: GazeSampleContinuity | null
 ): CompensatorySaccadeTrialBody | null {
   if (state.completed) return null;
 
@@ -564,16 +617,53 @@ export function stepCompensatorySaccadeTrial(
   const maxStimulusMs = Math.round(params.maximumStimulusDurationMs);
 
   if (state.phase === 'CENTRAL_ANCHOR') {
+    state.anchorElapsedMs += safeDeltaMs;
     const dist = Math.hypot(state.anchor.x - cursor.x, state.anchor.y - cursor.y);
     if (dist <= state.anchor.acceptanceRadius && isGazeValid) {
-      state.anchor.dwellTimeMs += effectiveDwellDelta;
+      if (!state.anchor.dwellContinuity) {
+        state.anchor.dwellContinuity = createEntityDwellContinuityState();
+      }
+      const creditedDwell = accumulateEntityDwellWithContinuity(
+        state.anchor.dwellContinuity,
+        effectiveDwellDelta,
+        sampleContinuity
+      );
+      state.anchor.dwellTimeMs = Math.min(
+        state.anchorElapsedMs,
+        state.anchor.dwellTimeMs + creditedDwell
+      );
       if (state.anchor.dwellTimeMs >= state.anchorHoldRequiredMs) {
         state.anchor.found = true;
         state.phase = 'PERIPHERAL_TARGET';
         state.saccadeElapsedMs = 0;
+        if (state.peripheralTarget.dwellContinuity) {
+          resetEntityDwellContinuityState(state.peripheralTarget.dwellContinuity);
+        }
+        return null;
       }
     } else {
+      if (state.anchor.dwellContinuity) {
+        resetEntityDwellContinuityState(state.anchor.dwellContinuity);
+      }
       state.anchor.dwellTimeMs = Math.max(0, state.anchor.dwellTimeMs - safeDeltaMs * 1.35);
+    }
+
+    if (state.anchorElapsedMs >= state.anchorTimeoutMs) {
+      state.completed = true;
+      state.outcome = 'TIMEOUT';
+      state.timedOutOnAnchor = true;
+      const elapsedMs = Math.max(
+        maxStimulusMs,
+        Math.round(state.anchorElapsedMs)
+      );
+      return {
+        schemaVersion: 1,
+        trialId: state.trialId,
+        dataOrigin,
+        outcome: 'TIMEOUT',
+        confirmedDwellMs: null,
+        elapsedMs,
+      };
     }
     return null;
   }
@@ -584,7 +674,18 @@ export function stepCompensatorySaccadeTrial(
   const dist = Math.hypot(target.x - cursor.x, target.y - cursor.y);
 
   if (dist <= target.acceptanceRadius && isGazeValid) {
-    target.dwellTimeMs += effectiveDwellDelta;
+    if (!target.dwellContinuity) {
+      target.dwellContinuity = createEntityDwellContinuityState();
+    }
+    const creditedDwell = accumulateEntityDwellWithContinuity(
+      target.dwellContinuity,
+      effectiveDwellDelta,
+      sampleContinuity
+    );
+    target.dwellTimeMs = Math.min(
+      state.saccadeElapsedMs,
+      target.dwellTimeMs + creditedDwell
+    );
     if (target.dwellTimeMs >= minFixMs) {
       target.found = true;
       state.completed = true;
@@ -609,6 +710,9 @@ export function stepCompensatorySaccadeTrial(
       };
     }
   } else {
+    if (target.dwellContinuity) {
+      resetEntityDwellContinuityState(target.dwellContinuity);
+    }
     target.dwellTimeMs = Math.max(0, target.dwellTimeMs - safeDeltaMs * 1.25);
   }
 
@@ -641,9 +745,13 @@ export function interruptCompensatorySaccadeTrial(
   state.completed = true;
   state.outcome = 'INTERRUPTED';
   const maxStimulusMs = Math.round(params.maximumStimulusDurationMs);
+  const rawPhaseElapsed =
+    state.phase === 'CENTRAL_ANCHOR'
+      ? state.anchorElapsedMs
+      : state.saccadeElapsedMs;
   const elapsedMs = Math.min(
     Math.max(0, maxStimulusMs - 1),
-    Math.max(1, Math.round(state.saccadeElapsedMs || 1))
+    Math.max(1, Math.round(rawPhaseElapsed || 1))
   );
   return {
     schemaVersion: 1,

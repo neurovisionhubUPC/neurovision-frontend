@@ -62,16 +62,16 @@ export const PatientTable: React.FC<PatientTableProps> = ({
         <table className="w-full text-left border-collapse text-xs">
           <thead>
             <tr className="bg-[#E6F6FF] border-b border-[#071524]/10 text-[#44474C] font-bold uppercase tracking-wider text-[11px]">
-              <th className="py-3.5 px-4" scope="col">
+              <th className="py-3.5 px-2.5 xl:px-4" scope="col">
                 Paciente / Historia Clínica
               </th>
-              <th className="py-3.5 px-3" scope="col">Edad / Sexo</th>
-              <th className="py-3.5 px-3" scope="col">Hemicampo Afectado</th>
-              <th className="py-3.5 px-3" scope="col">Estado de Cuenta</th>
-              <th className="py-3.5 px-3" scope="col">Última Sesión</th>
-              <th className="py-3.5 px-3" scope="col">Adherencia Terapéutica</th>
-              <th className="py-3.5 px-3" scope="col">Riesgo / Alerta</th>
-              <th className="py-3.5 px-4 text-right" scope="col">Acciones Clínicas</th>
+              <th className="py-3.5 px-2 xl:px-3" scope="col">Edad / Sexo</th>
+              <th className="py-3.5 px-2 xl:px-3" scope="col">Hemicampo Afectado</th>
+              <th className="py-3.5 px-2 xl:px-3" scope="col">Estado de Cuenta</th>
+              <th className="py-3.5 px-2 xl:px-3" scope="col">Última Sesión</th>
+              <th className="py-3.5 px-2 xl:px-3" scope="col">Adherencia Terapéutica</th>
+              <th className="py-3.5 px-2 xl:px-3" scope="col">Riesgo / Alerta</th>
+              <th className="py-3.5 px-2.5 xl:px-4 text-right" scope="col">Acciones Clínicas</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[#071524]/5 font-normal text-[#071E27]">
@@ -97,10 +97,10 @@ export const PatientTable: React.FC<PatientTableProps> = ({
                     }`}
                   >
                     {/* Paciente / HC */}
-                    <td className="py-3.5 px-4 font-medium">
-                      <div className="flex items-center gap-3">
+                    <td className="py-3.5 px-2.5 xl:px-4 font-medium">
+                      <div className="flex items-center gap-2.5 xl:gap-3">
                         <div
-                          className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${
+                          className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${
                             isCritical
                               ? 'bg-[#BA1A1A] text-white'
                               : 'bg-[#071524] text-white'
@@ -127,7 +127,7 @@ export const PatientTable: React.FC<PatientTableProps> = ({
                     </td>
 
                     {/* Edad / Sexo */}
-                    <td className="py-3.5 px-3">
+                    <td className="py-3.5 px-2 xl:px-3">
                       <span className="font-semibold text-[#071524]">
                         {patient.age > 0 ? `${patient.age} años` : 'No especificada'}
                       </span>
@@ -135,7 +135,7 @@ export const PatientTable: React.FC<PatientTableProps> = ({
                     </td>
 
                     {/* Hemicampo Afectado */}
-                    <td className="py-3.5 px-3">
+                    <td className="py-3.5 px-2 xl:px-3">
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold bg-[#1C2A39] text-[#84F5E8]">
                         {isLeftHemifield ? (
                           <>
@@ -149,13 +149,13 @@ export const PatientTable: React.FC<PatientTableProps> = ({
                           </>
                         )}
                       </span>
-                      <span className="block text-[10px] text-[#44474C] mt-0.5 font-medium max-w-[150px] truncate" title={patient.hemifieldDetail}>
+                      <span className="block text-[10px] text-[#44474C] mt-0.5 font-medium max-w-[125px] xl:max-w-[155px] truncate" title={patient.hemifieldDetail}>
                         {patient.hemifieldDetail}
                       </span>
                     </td>
 
                     {/* Estado de Cuenta */}
-                    <td className="py-3.5 px-3">
+                    <td className="py-3.5 px-2 xl:px-3">
                       {isPending ? (
                         <div>
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-[#FFDCC4] text-[#6F3800] border border-[#FFB780]">
@@ -177,7 +177,7 @@ export const PatientTable: React.FC<PatientTableProps> = ({
                     </td>
 
                     {/* Última Sesión */}
-                    <td className="py-3.5 px-3">
+                    <td className="py-3.5 px-2 xl:px-3">
                       <span className="font-semibold text-[#071524]">
                         {patient.lastSession.timestampText}
                       </span>
@@ -196,11 +196,11 @@ export const PatientTable: React.FC<PatientTableProps> = ({
                     </td>
 
                     {/* Adherencia Terapéutica */}
-                    <td className="py-3.5 px-3">
+                    <td className="py-3.5 px-2 xl:px-3">
                       {patient.adherence.rate === 0 ? (
                         <span className="text-[#74777C] font-semibold text-xs">-- (Sin telemetría)</span>
                       ) : (
-                        <div className="w-28">
+                        <div className="w-24 xl:w-28">
                           <div className="flex justify-between items-center mb-1">
                             <span
                               className={`font-bold ${
@@ -234,7 +234,7 @@ export const PatientTable: React.FC<PatientTableProps> = ({
                     </td>
 
                     {/* Riesgo / Alerta */}
-                    <td className="py-3.5 px-3">
+                    <td className="py-3.5 px-2 xl:px-3">
                       {isCritical ? (
                         <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#BA1A1A] bg-[#FFDAD6] px-2 py-0.5 rounded border border-[#BA1A1A]/20">
                           <AlertTriangle className="w-3 h-3 text-[#BA1A1A]" />
@@ -264,7 +264,7 @@ export const PatientTable: React.FC<PatientTableProps> = ({
                     </td>
 
                     {/* Acciones Clínicas */}
-                    <td className="py-3.5 px-4 text-right">
+                    <td className="py-3.5 px-2.5 xl:px-4 text-right">
                       <div className="inline-flex items-center gap-1">
                         {/* Botón de Vista Rápida para cualquier paciente */}
                         <button

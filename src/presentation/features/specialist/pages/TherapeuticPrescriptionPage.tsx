@@ -11,6 +11,7 @@ import {
   Sliders,
   ArrowLeft,
   AlertCircle,
+  AlertTriangle,
   Loader2,
   PlusCircle,
   RefreshCw,
@@ -39,7 +40,13 @@ import {
   type VisualScanningParameters,
   type VisualSearchParameters,
 } from '../../../../infrastructure/api';
+import {
+  validateExerciseCaptureCompatibility,
+  type ExerciseCompatibilityReport,
+} from '../../../../infrastructure/therapy/captureCompatibility';
 import { SpecialistHeader } from '../components/SpecialistHeader';
+import { SpecialistFooter } from '../components/SpecialistFooter';
+import { ClinicalTermTooltip } from '../../../shared/components/ClinicalTermTooltip';
 
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
@@ -442,6 +449,49 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
     (searchEnabled ? searchDailyCount : 0) +
     (fixationEnabled ? fixationDailyCount : 0);
 
+  const cleanScanning = useMemo(() => sanitizeScanningParams(scanningParams), [scanningParams]);
+  const cleanSearch = useMemo(() => sanitizeSearchParams(searchParams), [searchParams]);
+  const cleanFixation = useMemo(() => sanitizeFixationParams(fixationParams), [fixationParams]);
+
+  const scanningCompatibility: ExerciseCompatibilityReport | null = useMemo(
+    () => (scanningEnabled ? validateExerciseCaptureCompatibility(cleanScanning) : null),
+    [scanningEnabled, cleanScanning]
+  );
+
+  const searchCompatibility: ExerciseCompatibilityReport | null = useMemo(
+    () => (searchEnabled ? validateExerciseCaptureCompatibility(cleanSearch) : null),
+    [searchEnabled, cleanSearch]
+  );
+
+  const fixationCompatibility: ExerciseCompatibilityReport | null = useMemo(
+    () => (fixationEnabled ? validateExerciseCaptureCompatibility(cleanFixation) : null),
+    [fixationEnabled, cleanFixation]
+  );
+
+  const compatibilityBlockingMessage = useMemo(() => {
+    const modules: { label: string; report: ExerciseCompatibilityReport | null }[] = [
+      { label: 'Exploración Sacádica (visual-scanning)', report: scanningCompatibility },
+      { label: 'Búsqueda Visual (visual-search)', report: searchCompatibility },
+      { label: 'Fijación Sostenida (fixation)', report: fixationCompatibility },
+    ];
+    const errorDetails = modules
+      .filter((m) => m.report && !m.report.compatible)
+      .map((m) => {
+        const msgs = m.report!.issues
+          .filter((i) => i.severity === 'ERROR')
+          .map((i) => i.message)
+          .join(' ');
+        return `${m.label}: ${msgs}`;
+      });
+    return errorDetails.length > 0 ? errorDetails.join(' | ') : null;
+  }, [scanningCompatibility, searchCompatibility, fixationCompatibility]);
+
+  const hasCompatibilityWarnings = Boolean(
+    scanningCompatibility?.issues.some((i) => i.severity === 'WARNING') ||
+      searchCompatibility?.issues.some((i) => i.severity === 'WARNING') ||
+      fixationCompatibility?.issues.some((i) => i.severity === 'WARNING')
+  );
+
   const buildConfigurationBody = (
     code: TherapyExerciseCode
   ): AppendTherapeuticConfigurationBody => {
@@ -449,64 +499,91 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
     // TherapeuticExerciseConfiguration.create() never fails `effectiveFrom.isBefore(createdAt)`
     const effectiveFrom = new Date(Date.now() + 2000).toISOString();
     if (code === 'visual-scanning') {
-      const cleanParams = sanitizeScanningParams(scanningParams);
-      const cleanTarget = sanitizeCompletionTarget(scanningTarget, cleanParams.repetitions);
+      const cleanTarget = sanitizeCompletionTarget(scanningTarget, cleanScanning.repetitions);
       return {
         exerciseCode: 'visual-scanning',
         parameterSchemaVersion: 2,
         effectiveFrom,
         parameters: {
-          parameters: cleanParams,
+          parameters: cleanScanning,
           completionTarget: cleanTarget,
         },
       };
     }
     if (code === 'visual-search') {
-      const cleanParams = sanitizeSearchParams(searchParams);
       const cleanTarget = sanitizeCompletionTarget(searchTarget, null);
       return {
         exerciseCode: 'visual-search',
         parameterSchemaVersion: 2,
         effectiveFrom,
         parameters: {
-          parameters: cleanParams,
+          parameters: cleanSearch,
           completionTarget: cleanTarget,
         },
       };
     }
-    const cleanParams = sanitizeFixationParams(fixationParams);
-    const cleanTarget = sanitizeCompletionTarget(fixationTarget, cleanParams.repetitions);
+    const cleanTarget = sanitizeCompletionTarget(fixationTarget, cleanFixation.repetitions);
     return {
       exerciseCode: 'fixation',
       parameterSchemaVersion: 2,
       effectiveFrom,
       parameters: {
-        parameters: cleanParams,
+        parameters: cleanFixation,
         completionTarget: cleanTarget,
       },
     };
   };
 
-  const syncLocalStorePreview = (planId: string) => {
-    const cleanScanning = sanitizeScanningParams(scanningParams);
-    const cleanTarget = sanitizeCompletionTarget(scanningTarget, cleanScanning.repetitions);
+  const syncLocalStorePreview = (planId: string, preferredCode?: TherapyExerciseCode) => {
+    const resolvedCode: TherapyExerciseCode =
+      preferredCode ??
+      (scanningEnabled ? 'visual-scanning' : searchEnabled ? 'visual-search' : 'fixation');
+
+    const resolvedConfig =
+      resolvedCode === 'visual-scanning'
+        ? {
+            frozenParameters: cleanScanning,
+            completionTarget: sanitizeCompletionTarget(scanningTarget, cleanScanning.repetitions),
+            parameters: {
+              target_speed: Number((cleanScanning.difficultyLevel * 0.45).toFixed(2)),
+              visual_field_amplitude: Number((cleanScanning.eccentricityDegrees / 30).toFixed(2)),
+              min_fixation_time: cleanScanning.minimumFixationMs,
+            },
+          }
+        : resolvedCode === 'visual-search'
+        ? {
+            frozenParameters: cleanSearch,
+            completionTarget: sanitizeCompletionTarget(searchTarget, null),
+            parameters: {
+              target_speed: Number((cleanSearch.difficultyLevel * 0.45).toFixed(2)),
+              visual_field_amplitude: Number(cleanSearch.affectedHemifieldBias.toFixed(2)),
+              min_fixation_time: cleanSearch.minimumFixationMs,
+            },
+          }
+        : {
+            frozenParameters: cleanFixation,
+            completionTarget: sanitizeCompletionTarget(fixationTarget, cleanFixation.repetitions),
+            parameters: {
+              target_speed: Number((cleanFixation.difficultyLevel * 0.45).toFixed(2)),
+              visual_field_amplitude: Number(
+                ((cleanFixation.targetPosition === 'CENTER' ? 5 : 16) / 30).toFixed(2)
+              ),
+              min_fixation_time: cleanFixation.minimumFixationMs,
+            },
+          };
 
     setPrescription({
       prescriptionId: `PLN-${planId.slice(0, 8)}-${Date.now()}`,
       patientId: currentPatient.id,
-      gameId: scanningEnabled ? 'visual-scanning' : searchEnabled ? 'visual-search' : 'fixation',
-      parameters: {
-        target_speed: Number((cleanScanning.difficultyLevel * 0.45).toFixed(2)),
-        visual_field_amplitude: Number((cleanScanning.eccentricityDegrees / 30).toFixed(2)),
-        min_fixation_time: cleanScanning.minimumFixationMs,
-      },
+      gameId: resolvedCode,
+      parameters: resolvedConfig.parameters,
       clinicalContext: {
         therapyPlanId: planId,
-        exerciseCode: scanningEnabled ? 'visual-scanning' : searchEnabled ? 'visual-search' : 'fixation',
-        mode: cleanScanning.mode,
+        exerciseCode: resolvedCode,
+        mode: resolvedConfig.frozenParameters.mode,
         parameterSchemaVersion: 2,
-        frozenParameters: cleanScanning,
-        completionTarget: cleanTarget,
+        frozenParameters: resolvedConfig.frozenParameters,
+        completionTarget: resolvedConfig.completionTarget,
         sessionLimits: {
           minimumValidDurationMinutes,
           maximumSessionDurationMinutes,
@@ -519,6 +596,17 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
   const handleCreatePlanAndConfigs = async () => {
     if (activeModulesCount === 0) {
       setApiError('Debe habilitar al menos un ejercicio terapéutico para crear el plan.');
+      return;
+    }
+    if (compatibilityBlockingMessage) {
+      setApiError(compatibilityBlockingMessage);
+      showToast(compatibilityBlockingMessage);
+      return;
+    }
+    if (totalPrescribedDailySessions > 10) {
+      const quotaMsg = `Las sesiones prescritas por día (${totalPrescribedDailySessions}) superan el máximo diario permitido (10).`;
+      setApiError(quotaMsg);
+      showToast(quotaMsg);
       return;
     }
 
@@ -537,6 +625,9 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
         1,
         10
       );
+      if (safeSessionLimit !== dailySessionLimit) {
+        setDailySessionLimit(safeSessionLimit);
+      }
 
       const createBody: CreateTherapyPlanBody = {
         dailySessionLimit: safeSessionLimit,
@@ -591,6 +682,26 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
       setApiError('Primero debe crear un Plan Terapéutico antes de agregar configuraciones.');
       return;
     }
+    if (compatibilityBlockingMessage) {
+      setApiError(compatibilityBlockingMessage);
+      showToast(compatibilityBlockingMessage);
+      return;
+    }
+    const targetReport =
+      code === 'visual-scanning'
+        ? validateExerciseCaptureCompatibility(cleanScanning)
+        : code === 'visual-search'
+        ? validateExerciseCaptureCompatibility(cleanSearch)
+        : validateExerciseCaptureCompatibility(cleanFixation);
+    if (!targetReport.compatible) {
+      const msg = targetReport.issues
+        .filter((i) => i.severity === 'ERROR')
+        .map((i) => i.message)
+        .join(' ');
+      setApiError(msg);
+      showToast(msg);
+      return;
+    }
     setIsSubmitting(true);
     setApiError(null);
     try {
@@ -600,7 +711,7 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
         buildConfigurationBody(code)
       );
       await new Promise((resolve) => setTimeout(resolve, 2100));
-      syncLocalStorePreview(activePlan.therapyPlanId);
+      syncLocalStorePreview(activePlan.therapyPlanId, code);
       await loadRemoteData();
       showToast(`Configuración ${code} v${res.version} (Schema v${res.parameterSchemaVersion}) agregada al plan.`);
     } catch (err) {
@@ -614,6 +725,11 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
     if (!activePlan) return;
     if (activeModulesCount === 0) {
       setApiError('Seleccione al menos un ejercicio habilitado para agregar su configuración.');
+      return;
+    }
+    if (compatibilityBlockingMessage) {
+      setApiError(compatibilityBlockingMessage);
+      showToast(compatibilityBlockingMessage);
       return;
     }
     setIsSubmitting(true);
@@ -648,12 +764,29 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
       setApiError('Debe mantener al menos un ejercicio prescrito o suspender/cancelar el plan.');
       return;
     }
+    if (compatibilityBlockingMessage) {
+      setApiError(compatibilityBlockingMessage);
+      showToast(compatibilityBlockingMessage);
+      return;
+    }
+    if (revisionStopStatus === 'KEEP_ACTIVE' && totalPrescribedDailySessions > 10) {
+      const quotaMsg = `Las sesiones prescritas por día (${totalPrescribedDailySessions}) superan el máximo diario permitido (10).`;
+      setApiError(quotaMsg);
+      showToast(quotaMsg);
+      return;
+    }
 
     setIsSubmitting(true);
     setApiError(null);
     try {
       const safeTargetDuration = clampInt(dailyTargetDurationMinutes, 1, 180);
-      const safeSessionLimit = clampInt(dailySessionLimit, 1, 10);
+      const safeSessionLimit =
+        revisionStopStatus === 'KEEP_ACTIVE'
+          ? clampInt(Math.max(dailySessionLimit, totalPrescribedDailySessions), 1, 10)
+          : clampInt(dailySessionLimit, 1, 10);
+      if (safeSessionLimit !== dailySessionLimit) {
+        setDailySessionLimit(safeSessionLimit);
+      }
       const safeHardLimit = useHardSafetyLimit
         ? clampInt(
             Math.max(dailyHardSafetyLimitMinutes, safeTargetDuration),
@@ -742,6 +875,12 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
 
   // === Handlers de Modo MOCK ===
   const handleMockSaveDraft = () => {
+    if (compatibilityBlockingMessage) {
+      setApiError(compatibilityBlockingMessage);
+      showToast(compatibilityBlockingMessage);
+      return;
+    }
+    setApiError(null);
     updatePatient({
       ...currentPatient,
       clinicalNotes,
@@ -750,20 +889,13 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
   };
 
   const handleMockSaveImmutableVersion = () => {
-    const cleanScanning = sanitizeScanningParams(scanningParams);
-    const cleanSearch = sanitizeSearchParams(searchParams);
-    const cleanFixation = sanitizeFixationParams(fixationParams);
-
-    setPrescription({
-      prescriptionId: `PLN-2024-089-${Date.now()}`,
-      patientId: currentPatient.id,
-      gameId: 'saccadic-explorer',
-      parameters: {
-        target_speed: Number((cleanScanning.difficultyLevel * 0.5).toFixed(2)),
-        visual_field_amplitude: Number((cleanScanning.eccentricityDegrees / 30).toFixed(2)),
-        min_fixation_time: cleanScanning.minimumFixationMs,
-      },
-    });
+    if (compatibilityBlockingMessage) {
+      setApiError(compatibilityBlockingMessage);
+      showToast(compatibilityBlockingMessage);
+      return;
+    }
+    setApiError(null);
+    syncLocalStorePreview(`2024-089-${Date.now()}`);
 
     updatePatient({
       ...currentPatient,
@@ -828,6 +960,52 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
   const dayLabels = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
   const activeDaysCount = selectedDays.filter(Boolean).length;
 
+  const renderCompatibilityNotice = (report: ExerciseCompatibilityReport | null) => {
+    if (!report || report.issues.length === 0) return null;
+    const errors = report.issues.filter((i) => i.severity === 'ERROR');
+    const warnings = report.issues.filter((i) => i.severity === 'WARNING');
+    return (
+      <div className="mt-4 space-y-2">
+        {!report.compatible && errors.length > 0 && (
+          <div
+            role="alert"
+            className="p-3 rounded-lg bg-[#FFDAD6] border border-[#BA1A1A]/30 text-[#93000A] text-xs flex items-start gap-2"
+          >
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-[#BA1A1A]" />
+            <div className="space-y-0.5">
+              <p className="font-bold">
+                Parámetros incompatibles con la captura clínica (guardado bloqueado)
+              </p>
+              {errors.map((issue) => (
+                <p key={issue.code}>
+                  <span className="font-mono font-semibold">[{issue.code}]</span> {issue.message}
+                </p>
+              ))}
+            </div>
+          </div>
+        )}
+        {warnings.length > 0 && (
+          <div
+            role="status"
+            className="p-3 rounded-lg bg-[#FFF4E5] border border-[#FFE0B2] text-[#8C4A00] text-xs flex items-start gap-2"
+          >
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-[#D97706]" />
+            <div className="space-y-0.5">
+              <p className="font-bold">
+                Advertencia de margen clínico (margen: {report.headroomMs} ms)
+              </p>
+              {warnings.map((issue) => (
+                <p key={issue.code}>
+                  <span className="font-mono font-semibold">[{issue.code}]</span> {issue.message}
+                </p>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen flex flex-col font-sans text-[#071E27] bg-[#F3FAFF] antialiased selection:bg-[#81F3E5] selection:text-[#005049]">
       {/* Toast Notification */}
@@ -851,7 +1029,7 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
       />
 
       {/* Main Patient Context & Workspace Canvas */}
-      <main className="flex-1 max-w-[1280px] w-full mx-auto px-4 md:px-6 py-6 pb-40">
+      <main className="flex-1 max-w-[1440px] 2xl:max-w-[1536px] w-full mx-auto px-4 md:px-6 py-6 pb-10">
         {/* Clinical Breadcrumb */}
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs font-medium text-[#44474C] overflow-x-auto whitespace-nowrap">
@@ -1117,6 +1295,15 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
                 <p className="text-[11px] text-[#44474C] mt-1.5">
                   Rango válido: 1–10 sesiones/día (prescritas: {totalPrescribedDailySessions})
                 </p>
+                {totalPrescribedDailySessions > 10 ? (
+                  <p className="text-[11px] font-semibold text-[#93000A] mt-1">
+                    Excede el máximo de 10 sesiones/día permitidas; reduzca las sesiones por módulo.
+                  </p>
+                ) : dailySessionLimit < totalPrescribedDailySessions ? (
+                  <p className="text-[11px] font-semibold text-[#8C4A00] mt-1">
+                    Se exigirá mínimo {totalPrescribedDailySessions} sesiones/día al crear o revisar el plan.
+                  </p>
+                ) : null}
               </div>
 
               {/* dailyTargetDurationMinutes */}
@@ -1388,8 +1575,9 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block font-bold text-[#44474C] uppercase mb-1">
-                      Excentricidad ({scanningParams.eccentricityDegrees}°)
+                    <label className="flex items-center gap-1 font-bold text-[#44474C] uppercase mb-1">
+                      <span>Excentricidad ({scanningParams.eccentricityDegrees}°)</span>
+                      <ClinicalTermTooltip termId="PARAM_ECCENTRICITY" audience="specialist" iconSize={12} />
                     </label>
                     <input
                       type="number"
@@ -1409,7 +1597,10 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block font-bold text-[#44474C] uppercase mb-1">Fijación Mínima (ms)</label>
+                    <label className="flex items-center gap-1 font-bold text-[#44474C] uppercase mb-1">
+                      <span>Fijación Mínima (ms)</span>
+                      <ClinicalTermTooltip termId="PARAM_MIN_FIXATION" audience="specialist" iconSize={12} />
+                    </label>
                     <input
                       type="number"
                       min={300}
@@ -1449,7 +1640,10 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block font-bold text-[#44474C] uppercase mb-1">Intervalo Interestímulo (ms)</label>
+                    <label className="flex items-center gap-1 font-bold text-[#44474C] uppercase mb-1">
+                      <span>Intervalo Interestímulo (ms)</span>
+                      <ClinicalTermTooltip termId="PARAM_ISI_REST" audience="specialist" iconSize={12} />
+                    </label>
                     <input
                       type="number"
                       min={500}
@@ -1489,7 +1683,10 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block font-bold text-[#44474C] uppercase mb-1">Tamaño Diana (px) & Nivel</label>
+                    <label className="flex items-center gap-1 font-bold text-[#44474C] uppercase mb-1">
+                      <span>Tamaño Diana (px) & Nivel</span>
+                      <ClinicalTermTooltip termId="PARAM_TARGET_SIZE" audience="specialist" iconSize={12} />
+                    </label>
                     <div className="grid grid-cols-2 gap-2">
                       <input
                         type="number"
@@ -1570,6 +1767,7 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
                     </div>
                   </div>
                 </div>
+                {renderCompatibilityNotice(scanningCompatibility)}
               </div>
 
               {/* MÓDULO 2: VISUAL SEARCH */}
@@ -1681,7 +1879,10 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block font-bold text-[#44474C] uppercase mb-1">Sesgo Hemicampo (`bias`)</label>
+                    <label className="flex items-center gap-1 font-bold text-[#44474C] uppercase mb-1">
+                      <span>Sesgo Hemicampo (`bias`)</span>
+                      <ClinicalTermTooltip termId="PARAM_HEMIFIELD_BIAS" audience="specialist" iconSize={12} />
+                    </label>
                     <input
                       type="number"
                       min={0.5}
@@ -1701,7 +1902,10 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block font-bold text-[#44474C] uppercase mb-1">Fijación Mínima (ms)</label>
+                    <label className="flex items-center gap-1 font-bold text-[#44474C] uppercase mb-1">
+                      <span>Fijación Mínima (ms)</span>
+                      <ClinicalTermTooltip termId="PARAM_MIN_FIXATION" audience="specialist" iconSize={12} />
+                    </label>
                     <input
                       type="number"
                       min={300}
@@ -1741,7 +1945,10 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block font-bold text-[#44474C] uppercase mb-1">Tamaño Diana (px) & Nivel</label>
+                    <label className="flex items-center gap-1 font-bold text-[#44474C] uppercase mb-1">
+                      <span>Tamaño Diana (px) & Nivel</span>
+                      <ClinicalTermTooltip termId="PARAM_TARGET_SIZE" audience="specialist" iconSize={12} />
+                    </label>
                     <div className="grid grid-cols-2 gap-2">
                       <input
                         type="number"
@@ -1822,6 +2029,7 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
                     </div>
                   </div>
                 </div>
+                {renderCompatibilityNotice(searchCompatibility)}
               </div>
 
               {/* MÓDULO 3: FIXATION */}
@@ -1897,7 +2105,10 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block font-bold text-[#44474C] uppercase mb-1">Fijación Mínima (ms)</label>
+                    <label className="flex items-center gap-1 font-bold text-[#44474C] uppercase mb-1">
+                      <span>Fijación Mínima (ms)</span>
+                      <ClinicalTermTooltip termId="PARAM_MIN_FIXATION" audience="specialist" iconSize={12} />
+                    </label>
                     <input
                       type="number"
                       min={300}
@@ -1943,7 +2154,10 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block font-bold text-[#44474C] uppercase mb-1">Descanso Entre Reps (ms)</label>
+                    <label className="flex items-center gap-1 font-bold text-[#44474C] uppercase mb-1">
+                      <span>Descanso Entre Reps (ms)</span>
+                      <ClinicalTermTooltip termId="PARAM_ISI_REST" audience="specialist" iconSize={12} />
+                    </label>
                     <input
                       type="number"
                       min={500}
@@ -1983,7 +2197,10 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block font-bold text-[#44474C] uppercase mb-1">Tamaño Diana (px) & Nivel</label>
+                    <label className="flex items-center gap-1 font-bold text-[#44474C] uppercase mb-1">
+                      <span>Tamaño Diana (px) & Nivel</span>
+                      <ClinicalTermTooltip termId="PARAM_TARGET_SIZE" audience="specialist" iconSize={12} />
+                    </label>
                     <div className="grid grid-cols-2 gap-2">
                       <input
                         type="number"
@@ -2064,6 +2281,7 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
                     </div>
                   </div>
                 </div>
+                {renderCompatibilityNotice(fixationCompatibility)}
               </div>
             </div>
           </section>
@@ -2073,9 +2291,9 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
       {/* Sticky Bottom Action Bar */}
       <aside
         aria-label="Acciones de guardado de prescripción"
-        className="fixed bottom-0 left-0 w-full z-50 bg-white/95 backdrop-blur-md border-t-2 border-[#071524]/10 shadow-[0_-4px_16px_rgba(7,21,36,0.06)]"
+        className="sticky bottom-0 left-0 w-full z-30 bg-white/95 backdrop-blur-md border-t-2 border-[#071524]/10 shadow-[0_-4px_16px_rgba(7,21,36,0.06)]"
       >
-        <div className="max-w-[1280px] mx-auto px-4 md:px-6 py-3.5 flex flex-col md:flex-row items-center justify-between gap-4">
+        <div className="max-w-[1440px] 2xl:max-w-[1536px] mx-auto px-4 md:px-6 py-3.5 flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-5 text-xs text-[#44474C]">
             {isCognitoMode ? (
               <div>
@@ -2085,16 +2303,43 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
                     : 'Nuevo Plan Terapéutico'}
                 </span>
                 <span className="mx-2">•</span>
-                <span className="text-[#006A62] font-bold">
-                  {activeModulesCount} módulo(s) · Schema v2 validado
+                <span
+                  className={`font-bold ${
+                    compatibilityBlockingMessage
+                      ? 'text-[#BA1A1A]'
+                      : hasCompatibilityWarnings
+                      ? 'text-[#B45309]'
+                      : 'text-[#006A62]'
+                  }`}
+                >
+                  {activeModulesCount} módulo(s) ·{' '}
+                  {compatibilityBlockingMessage
+                    ? 'Error de compatibilidad (guardado bloqueado)'
+                    : hasCompatibilityWarnings
+                    ? 'Schema v2 con advertencia de margen'
+                    : 'Schema v2 validado'}
                 </span>
               </div>
             ) : (
               <div>
                 <span className="font-bold text-[#071524]">ID: PLN-2024-089</span>
                 <span className="mx-2">•</span>
-                <span className="text-[#006A62] font-bold">
-                  Versión: {mockPlanVersion} ({activeModulesCount} módulos)
+                <span
+                  className={`font-bold ${
+                    compatibilityBlockingMessage
+                      ? 'text-[#BA1A1A]'
+                      : hasCompatibilityWarnings
+                      ? 'text-[#B45309]'
+                      : 'text-[#006A62]'
+                  }`}
+                >
+                  Versión: {mockPlanVersion} ({activeModulesCount} módulos
+                  {compatibilityBlockingMessage
+                    ? ' · Error de compatibilidad'
+                    : hasCompatibilityWarnings
+                    ? ' · Advertencia de margen'
+                    : ''}
+                  )
                 </span>
               </div>
             )}
@@ -2156,6 +2401,8 @@ export const TherapeuticPrescriptionPage: React.FC = () => {
           </div>
         </div>
       </aside>
+
+      <SpecialistFooter />
     </div>
   );
 };

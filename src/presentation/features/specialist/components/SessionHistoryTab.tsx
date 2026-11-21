@@ -631,12 +631,12 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="border-b border-[#071524]/10 bg-[#E6F6FF]/40 text-[11px] font-bold text-[#44474C] uppercase tracking-wider">
-                  <th className="py-3 px-4 md:px-6">Sesión & Inicio / Fin</th>
-                  <th className="py-3 px-4">Ejercicio & Modo</th>
-                  <th className="py-3 px-4">Duración & Repeticiones</th>
-                  <th className="py-3 px-4">Estado</th>
-                  <th className="py-3 px-4">Analítica 8085</th>
-                  <th className="py-3 px-4 md:px-6 text-right">Acciones Clínicas</th>
+                  <th className="py-3 px-3 xl:px-5">Sesión & Inicio / Fin</th>
+                  <th className="py-3 px-3 xl:px-4">Ejercicio & Modo</th>
+                  <th className="py-3 px-3 xl:px-4">Duración & Repeticiones</th>
+                  <th className="py-3 px-3 xl:px-4">Estado</th>
+                  <th className="py-3 px-3 xl:px-4">Analítica 8085</th>
+                  <th className="py-3 px-3 xl:px-5 text-right">Acciones Clínicas</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#071524]/10">
@@ -665,7 +665,7 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({
 
                     return (
                       <tr key={s.therapySessionId} className="hover:bg-[#E6F6FF]/40 transition-colors">
-                        <td className="py-3.5 px-4 md:px-6 whitespace-nowrap">
+                        <td className="py-3.5 px-3 xl:px-5 whitespace-nowrap">
                           <div className="font-mono font-bold text-[#071524]" title={s.therapySessionId}>
                             {s.therapySessionId.slice(0, 12)}…
                           </div>
@@ -677,7 +677,7 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({
                           </div>
                         </td>
 
-                        <td className="py-3.5 px-4">
+                        <td className="py-3.5 px-3 xl:px-4">
                           <div className="font-bold text-[#071524]">
                             {EXERCISE_LABELS[s.exerciseCode]}
                           </div>
@@ -694,7 +694,7 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({
                           </div>
                         </td>
 
-                        <td className="py-3.5 px-4 whitespace-nowrap">
+                        <td className="py-3.5 px-3 xl:px-4 whitespace-nowrap">
                           <div className="font-bold text-[#071524]">
                             {formatDurationSeconds(s.activeDurationSeconds)}
                           </div>
@@ -716,7 +716,7 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({
                             )}
                         </td>
 
-                        <td className="py-3.5 px-4 whitespace-nowrap">
+                        <td className="py-3.5 px-3 xl:px-4 whitespace-nowrap">
                           <span
                             className={`inline-flex items-center px-2.5 py-1 rounded-md text-[11px] font-bold border ${statusBadge.className}`}
                           >
@@ -727,7 +727,7 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({
                           </div>
                         </td>
 
-                        <td className="py-3.5 px-4 whitespace-nowrap">
+                        <td className="py-3.5 px-3 xl:px-4 whitespace-nowrap">
                           {!enrich ? (
                             <span className="text-[11px] text-[#74777C]">Verificando...</span>
                           ) : enrich.analyticsChecked && enrich.hasAnalytics ? (
@@ -746,12 +746,12 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({
                           )}
                         </td>
 
-                        <td className="py-3.5 px-4 md:px-6 text-right whitespace-nowrap">
+                        <td className="py-3.5 px-3 xl:px-5 text-right whitespace-nowrap">
                           <div className="flex items-center justify-end gap-1.5">
                             <button
                               type="button"
                               onClick={() => onOpenAnalytics(mappedRecord)}
-                              className="px-2.5 py-1.5 text-xs font-semibold rounded-lg border border-[#071524]/20 hover:bg-[#DBF1FE] text-[#071524] transition-colors cursor-pointer"
+                              className="px-2 xl:px-2.5 py-1.5 text-xs font-semibold rounded-lg border border-[#071524]/20 hover:bg-[#DBF1FE] text-[#071524] transition-colors cursor-pointer"
                             >
                               Ver Analítica
                             </button>
@@ -761,7 +761,7 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({
                                   to={`/specialist/patients/${encodeURIComponent(
                                     resolvedPatientId
                                   )}/auditoria?sessionId=${encodeURIComponent(s.therapySessionId)}`}
-                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-[#E6F6FF] hover:bg-[#D5ECF8] text-[#006A62] border border-[#006A62]/20 transition-colors"
+                                  className="inline-flex items-center gap-1 px-2 xl:px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-[#E6F6FF] hover:bg-[#D5ECF8] text-[#006A62] border border-[#006A62]/20 transition-colors"
                                   title="Abrir Auditoría 120Hz"
                                 >
                                   <Activity className="w-3.5 h-3.5" />
@@ -771,7 +771,7 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({
                                   to={`/specialist/patients/${encodeURIComponent(
                                     resolvedPatientId
                                   )}/reporte-pdf?sessionId=${encodeURIComponent(s.therapySessionId)}`}
-                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-[#071524] hover:bg-[#1C2A39] text-white transition-colors"
+                                  className="inline-flex items-center gap-1 px-2 xl:px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-[#071524] hover:bg-[#1C2A39] text-white transition-colors"
                                   title="Vista previa y emisión de PDF oficial"
                                 >
                                   <FileText className="w-3.5 h-3.5 text-[#84F5E8]" />
@@ -979,13 +979,13 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({
           <table className="w-full text-left border-collapse text-xs md:text-sm">
             <thead>
               <tr className="border-b border-[#071524]/10 bg-[#E6F6FF]/40 text-xs font-bold text-[#44474C] uppercase tracking-wider">
-                <th className="py-3 px-4 md:px-6" scope="col">Fecha & Hora</th>
-                <th className="py-3 px-4" scope="col">Módulo de Ejercicio</th>
-                <th className="py-3 px-4" scope="col">Duración</th>
-                <th className="py-3 px-4 min-w-[140px]" scope="col">Cumplimiento</th>
-                <th className="py-3 px-4" scope="col">Fijación Foveal</th>
-                <th className="py-3 px-4" scope="col">Validación Técnica</th>
-                <th className="py-3 px-4 md:px-6 text-right" scope="col">Acciones Clínicas</th>
+                <th className="py-3 px-2.5 xl:px-4" scope="col">Fecha & Hora</th>
+                <th className="py-3 px-2.5 xl:px-4" scope="col">Módulo de Ejercicio</th>
+                <th className="py-3 px-2.5 xl:px-4" scope="col">Duración</th>
+                <th className="py-3 px-2.5 xl:px-4 min-w-[115px] xl:min-w-[140px]" scope="col">Cumplimiento</th>
+                <th className="py-3 px-2.5 xl:px-4" scope="col">Fijación Foveal</th>
+                <th className="py-3 px-2.5 xl:px-4" scope="col">Validación Técnica</th>
+                <th className="py-3 px-2.5 xl:px-4 text-right" scope="col">Acciones Clínicas</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#071524]/10 font-normal text-xs md:text-sm">
@@ -1010,7 +1010,7 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({
                       }`}
                     >
                       {/* Fecha & Hora */}
-                      <td className="py-4 px-4 md:px-6 whitespace-nowrap">
+                      <td className="py-4 px-2.5 xl:px-4 whitespace-nowrap">
                         <span className="font-bold text-[#071524] block">{session.dateText}</span>
                         <span className="text-xs text-[#44474C]">
                           {session.timeText} ({session.period})
@@ -1018,13 +1018,13 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({
                       </td>
 
                       {/* Módulo */}
-                      <td className="py-4 px-4">
+                      <td className="py-4 px-2.5 xl:px-4">
                         <div className="font-semibold text-[#071524]">{session.moduleName}</div>
                         <span className="text-xs text-[#44474C]">{session.moduleDetail}</span>
                       </td>
 
                       {/* Duración */}
-                      <td className="py-4 px-4 font-semibold text-[#071524] whitespace-nowrap">
+                      <td className="py-4 px-2.5 xl:px-4 font-semibold text-[#071524] whitespace-nowrap">
                         {session.durationMinutes} min
                         {session.targetDurationMinutes && (
                           <span className="text-xs text-[#44474C] font-normal">
@@ -1034,7 +1034,7 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({
                       </td>
 
                       {/* Cumplimiento */}
-                      <td className="py-4 px-4">
+                      <td className="py-4 px-2.5 xl:px-4">
                         <div className="flex items-center gap-2">
                           <span
                             className={`font-bold text-xs ${
@@ -1043,7 +1043,7 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({
                           >
                             {session.complianceRate}%
                           </span>
-                          <div className="w-20 bg-[#DBF1FE] h-2 rounded-full overflow-hidden">
+                          <div className="w-16 xl:w-20 bg-[#DBF1FE] h-2 rounded-full overflow-hidden">
                             <div
                               className={`h-full rounded-full transition-all duration-300 ${
                                 isInterrupted ? 'bg-[#FFB780]' : 'bg-[#006A62]'
@@ -1055,7 +1055,7 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({
                       </td>
 
                       {/* Fijación Foveal */}
-                      <td className="py-4 px-4 whitespace-nowrap">
+                      <td className="py-4 px-2.5 xl:px-4 whitespace-nowrap">
                         <span className="font-semibold text-[#071524]">
                           {session.fovealPrecision}% precisión
                         </span>
@@ -1077,14 +1077,14 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({
                       </td>
 
                       {/* Validación Técnica */}
-                      <td className="py-4 px-4 whitespace-nowrap">
+                      <td className="py-4 px-2.5 xl:px-4 whitespace-nowrap">
                         {isInterrupted ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#FFDCC4] text-[#6F3800] text-xs font-semibold border border-[#FFB780]">
+                          <span className="inline-flex items-center gap-1 px-2 xl:px-2.5 py-1 rounded-md bg-[#FFDCC4] text-[#6F3800] text-xs font-semibold border border-[#FFB780]">
                             <AlertTriangle className="w-3.5 h-3.5 text-[#BA1A1A]" />
                             {session.validationLabel}
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#81F3E5]/40 text-[#005049] text-xs font-semibold border border-[#006A62]/20">
+                          <span className="inline-flex items-center gap-1 px-2 xl:px-2.5 py-1 rounded-md bg-[#81F3E5]/40 text-[#005049] text-xs font-semibold border border-[#006A62]/20">
                             <CheckCircle2 className="w-3.5 h-3.5 text-[#006A62]" />
                             {session.validationLabel}
                           </span>
@@ -1092,11 +1092,11 @@ export const SessionHistoryTab: React.FC<SessionHistoryTabProps> = ({
                       </td>
 
                       {/* Acciones */}
-                      <td className="py-4 px-4 md:px-6 text-right whitespace-nowrap">
-                        <div className="flex items-center justify-end gap-2">
+                      <td className="py-4 px-2.5 xl:px-4 text-right whitespace-nowrap">
+                        <div className="flex items-center justify-end gap-1.5 xl:gap-2">
                           <button
                             onClick={() => onOpenAnalytics(session)}
-                            className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-[#071524]/20 hover:bg-[#DBF1FE] text-[#071524] transition-colors cursor-pointer"
+                            className="px-2 xl:px-3 py-1.5 text-xs font-semibold rounded-lg border border-[#071524]/20 hover:bg-[#DBF1FE] text-[#071524] transition-colors cursor-pointer"
                           >
                             Ver Analítica
                           </button>

@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import type { SessionRecord } from '../../../../core/domain/Patient';
 import { useAppStore } from '../../../../core/store/useAppStore';
+import { ClinicalTermTooltip } from '../../../shared/components/ClinicalTermTooltip';
 import {
   analyticsApi,
   ApiError,
@@ -370,8 +371,9 @@ export const SessionAnalyticsModal: React.FC<SessionAnalyticsModalProps> = ({
               </div>
 
               <div className="p-3 bg-[#E6F6FF] rounded-xl border border-[#071524]/10 text-center">
-                <span className="text-[#44474C] font-semibold block text-[11px]">
+                <span className="text-[#44474C] font-semibold flex items-center justify-center gap-1 text-[11px]">
                   Muestras (Gaze / Total)
+                  <ClinicalTermTooltip termId="SESSION_DURATION_SAMPLES" audience="specialist" iconSize={12} />
                 </span>
                 <strong className="text-base text-[#006A62]">
                   {streamSummary
@@ -381,7 +383,10 @@ export const SessionAnalyticsModal: React.FC<SessionAnalyticsModalProps> = ({
               </div>
 
               <div className="p-3 bg-[#E6F6FF] rounded-xl border border-[#071524]/10 text-center">
-                <span className="text-[#44474C] font-semibold block text-[11px]">Confianza Media</span>
+                <span className="text-[#44474C] font-semibold flex items-center justify-center gap-1 text-[11px]">
+                  Confianza Media
+                  <ClinicalTermTooltip termId="CONFIDENCE_MEAN" audience="specialist" iconSize={12} />
+                </span>
                 <strong className="text-base text-[#071524]">
                   {streamSummary?.metrics.confidence.mean !== null &&
                   streamSummary?.metrics.confidence.mean !== undefined
@@ -391,7 +396,10 @@ export const SessionAnalyticsModal: React.FC<SessionAnalyticsModalProps> = ({
               </div>
 
               <div className="p-3 bg-[#E6F6FF] rounded-xl border border-[#071524]/10 text-center">
-                <span className="text-[#44474C] font-semibold block text-[11px]">Cobertura Espacial</span>
+                <span className="text-[#44474C] font-semibold flex items-center justify-center gap-1 text-[11px]">
+                  Cobertura Espacial
+                  <ClinicalTermTooltip termId="QUADRANT_COVERAGE" audience="specialist" iconSize={12} />
+                </span>
                 <strong className="text-base text-[#071524]">
                   {streamSummary
                     ? `${(streamSummary.metrics.coverage.occupiedCellRatio * 100).toFixed(1)}%`
@@ -403,13 +411,19 @@ export const SessionAnalyticsModal: React.FC<SessionAnalyticsModalProps> = ({
             {streamSummary && (
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-[11px]">
                 <div className="p-2.5 rounded-lg bg-white border border-[#071524]/10">
-                  <span className="text-[#44474C] block">Distancia Gaze Path</span>
+                  <span className="text-[#44474C] flex items-center gap-1">
+                    Distancia Gaze Path
+                    <ClinicalTermTooltip termId="GAZE_PATH_DISTANCE" audience="specialist" iconSize={12} />
+                  </span>
                   <strong className="text-[#071524] font-mono">
                     {streamSummary.metrics.gazePath.totalDistance.toFixed(3)} u
                   </strong>
                 </div>
                 <div className="p-2.5 rounded-lg bg-white border border-[#071524]/10">
-                  <span className="text-[#44474C] block">Rangos Faltantes / Tardíos</span>
+                  <span className="text-[#44474C] flex items-center gap-1">
+                    Rangos Faltantes / Tardíos
+                    <ClinicalTermTooltip termId="SEQUENCE_COMPLETENESS" audience="specialist" iconSize={12} />
+                  </span>
                   <strong className="text-[#071524] font-mono">
                     {streamSummary.completeness.missingSequenceRangeCount} /{' '}
                     {streamSummary.completeness.lateArrivalCount}
@@ -439,6 +453,7 @@ export const SessionAnalyticsModal: React.FC<SessionAnalyticsModalProps> = ({
                 <h4 className="font-bold text-sm text-[#071524] flex items-center gap-2">
                   <Grid3X3 className="w-4 h-4 text-[#006A62]" />
                   Matriz de Calor de Fijación Ocular
+                  <ClinicalTermTooltip termId="HEATMAP" audience="specialist" />
                 </h4>
                 {streamHeatmap && (
                   <span className="text-[11px] font-mono text-[#44474C]">
@@ -501,6 +516,7 @@ export const SessionAnalyticsModal: React.FC<SessionAnalyticsModalProps> = ({
                 <h4 className="font-bold text-xs text-[#071524] flex items-center gap-1.5">
                   <Target className="w-4 h-4 text-[#006A62]" />
                   Resumen de Ensayos Clínicos ({trialDataOrigin})
+                  <ClinicalTermTooltip termId="INPUT_ORIGIN" audience="specialist" iconSize={12} />
                 </h4>
                 <div className="flex items-center gap-2">
                   <select
@@ -543,7 +559,10 @@ export const SessionAnalyticsModal: React.FC<SessionAnalyticsModalProps> = ({
                         <strong className="text-[#071524]">{trialSummary.eligibleSearchCount}</strong>
                       </div>
                       <div className="p-2 rounded bg-[#F3FAFF]">
-                        <span className="text-[#44474C] block">Mediana Búsqueda</span>
+                        <span className="text-[#44474C] flex items-center gap-1">
+                          Mediana Búsqueda
+                          <ClinicalTermTooltip termId="MEDIAN_DURATION" audience="specialist" iconSize={12} />
+                        </span>
                         <strong className="text-[#071524]">
                           {trialSummary.medianSearchDurationMs !== null
                             ? `${Math.round(trialSummary.medianSearchDurationMs)} ms`
@@ -567,7 +586,10 @@ export const SessionAnalyticsModal: React.FC<SessionAnalyticsModalProps> = ({
                         </strong>
                       </div>
                       <div className="p-2 rounded bg-[#F3FAFF]">
-                        <span className="text-[#44474C] block">Mediana Localización</span>
+                        <span className="text-[#44474C] flex items-center gap-1">
+                          Mediana Localización
+                          <ClinicalTermTooltip termId="MEDIAN_DURATION" audience="specialist" iconSize={12} />
+                        </span>
                         <strong className="text-[#071524]">
                           {trialSummary.medianLocalizationDurationMs !== null
                             ? `${Math.round(trialSummary.medianLocalizationDurationMs)} ms`
@@ -597,7 +619,10 @@ export const SessionAnalyticsModal: React.FC<SessionAnalyticsModalProps> = ({
                         <strong className="text-[#006A62]">{trialSummary.reachedTargetCount}</strong>
                       </div>
                       <div className="p-2 rounded bg-[#F3FAFF]">
-                        <span className="text-[#44474C] block">Mediana Tiempo al Objetivo</span>
+                        <span className="text-[#44474C] flex items-center gap-1">
+                          Mediana Tiempo al Objetivo
+                          <ClinicalTermTooltip termId="MEDIAN_DURATION" audience="specialist" iconSize={12} />
+                        </span>
                         <strong className="text-[#071524]">
                           {trialSummary.medianTimeToTargetMs !== null
                             ? `${Math.round(trialSummary.medianTimeToTargetMs)} ms`
@@ -707,7 +732,10 @@ export const SessionAnalyticsModal: React.FC<SessionAnalyticsModalProps> = ({
             </div>
 
             <div className="p-3 bg-[#E6F6FF] rounded-xl border border-[#071524]/10 text-center">
-              <span className="text-[#44474C] font-semibold block text-[11px]">Precisión Foveal</span>
+              <span className="text-[#44474C] font-semibold flex items-center justify-center gap-1 text-[11px]">
+                Precisión Foveal
+                <ClinicalTermTooltip termId="FOVEAL_FIXATION" audience="specialist" iconSize={12} />
+              </span>
               <strong className="text-base text-[#071524]">{session.fovealPrecision}%</strong>
             </div>
 
@@ -735,8 +763,9 @@ export const SessionAnalyticsModal: React.FC<SessionAnalyticsModalProps> = ({
               <div className="w-24 h-16 rounded-full bg-[#84F5E8]/30 border border-[#84F5E8] absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2" />
               <div className="w-3 h-3 rounded-full bg-[#BA1A1A] absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2" />
 
-              <span className="text-[11px] font-semibold text-[#071524] z-10 bg-white/90 px-2 py-0.5 rounded shadow-xs mt-auto">
-                Dispersión elíptica BCEA: 0.84 deg² · 94% de fijaciones dentro del umbral
+              <span className="text-[11px] font-semibold text-[#071524] z-10 bg-white/90 px-2 py-0.5 rounded shadow-xs mt-auto inline-flex items-center gap-1">
+                <span>Dispersión elíptica BCEA: 0.84 deg² · 94% de fijaciones dentro del umbral</span>
+                <ClinicalTermTooltip termId="BCEA" audience="specialist" iconSize={12} />
               </span>
             </div>
           </div>

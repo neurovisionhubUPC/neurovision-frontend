@@ -7,6 +7,13 @@ import type {
   SustainedFixationTrialBody,
   VisualSearchTrialBody,
 } from '../../api/contracts/analytics.contracts';
+import {
+  accumulateEntityDwellWithContinuity,
+  createEntityDwellContinuityState,
+  resetEntityDwellContinuityState,
+  type EntityDwellContinuityState,
+  type GazeSampleContinuity,
+} from '../gazeFreshnessGuard.ts';
 
 /**
  * Standard RFC4122 v4 UUID generator (browser & worker safe).
@@ -62,6 +69,7 @@ export interface SearchEntity {
   found: boolean;
   dwellTimeMs: number;
   falseFixationCount: number;
+  dwellContinuity?: EntityDwellContinuityState;
 }
 
 export interface VisualSearchTrialState {
@@ -194,6 +202,7 @@ export function createVisualSearchTrial(
       found: false,
       dwellTimeMs: 0,
       falseFixationCount: 0,
+      dwellContinuity: createEntityDwellContinuityState(),
     });
   }
 
@@ -242,6 +251,7 @@ export function createVisualSearchTrial(
       found: false,
       dwellTimeMs: 0,
       falseFixationCount: 0,
+      dwellContinuity: createEntityDwellContinuityState(),
     });
   }
 
@@ -279,7 +289,8 @@ export function stepVisualSearchTrial(
   params: VisualSearchParameters,
   isGazeValid: boolean = true,
   dwellDeltaMs?: number,
-  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED'
+  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED',
+  sampleContinuity?: GazeSampleContinuity | null
 ): VisualSearchTrialBody | null {
   if (state.completed) {
     return null;
@@ -299,12 +310,23 @@ export function stepVisualSearchTrial(
     if (entity.kind === 'TARGET') {
       if (!entity.found) {
         if (hovering && isGazeValid) {
-          entity.dwellTimeMs += effectiveDwellDelta;
+          if (!entity.dwellContinuity) {
+            entity.dwellContinuity = createEntityDwellContinuityState();
+          }
+          const credited = accumulateEntityDwellWithContinuity(
+            entity.dwellContinuity,
+            effectiveDwellDelta,
+            sampleContinuity
+          );
+          entity.dwellTimeMs = Math.min(state.elapsedMs, entity.dwellTimeMs + credited);
           if (entity.dwellTimeMs >= minFixMs) {
             entity.found = true;
             state.lastConfirmedDwellMs = entity.dwellTimeMs;
           }
         } else {
+          if (entity.dwellContinuity) {
+            resetEntityDwellContinuityState(entity.dwellContinuity);
+          }
           // Smooth gaze jitter decay
           entity.dwellTimeMs = Math.max(0, entity.dwellTimeMs - safeDeltaMs * 1.5);
         }
@@ -312,13 +334,24 @@ export function stepVisualSearchTrial(
     } else {
       // DISTRACTOR entity
       if (hovering && isGazeValid) {
+        if (!entity.dwellContinuity) {
+          entity.dwellContinuity = createEntityDwellContinuityState();
+        }
         const previousDwell = entity.dwellTimeMs;
-        entity.dwellTimeMs += effectiveDwellDelta;
+        const credited = accumulateEntityDwellWithContinuity(
+          entity.dwellContinuity,
+          effectiveDwellDelta,
+          sampleContinuity
+        );
+        entity.dwellTimeMs = Math.min(state.elapsedMs, entity.dwellTimeMs + credited);
         if (previousDwell < 250 && entity.dwellTimeMs >= 250) {
           entity.falseFixationCount += 1;
           state.falseFixations += 1;
         }
       } else {
+        if (entity.dwellContinuity) {
+          resetEntityDwellContinuityState(entity.dwellContinuity);
+        }
         entity.dwellTimeMs = Math.max(0, entity.dwellTimeMs - safeDeltaMs * 2.0);
       }
     }
@@ -418,6 +451,7 @@ export interface FixationTrialState {
   longestContinuousInsideMs: number;
   outsideGraceMs: number;
   fixationLosses: number;
+  dwellContinuity?: EntityDwellContinuityState;
   completed?: boolean;
   outcome?: 'SUCCESS' | 'TIMEOUT' | 'INTERRUPTED' | null;
 }
@@ -485,6 +519,7 @@ export function createSustainedFixationTrial(
     longestContinuousInsideMs: 0,
     outsideGraceMs: 0,
     fixationLosses: 0,
+    dwellContinuity: createEntityDwellContinuityState(),
     completed: false,
     outcome: null,
   };
@@ -520,7 +555,8 @@ export function stepSustainedFixationTrial(
   params: FixationParameters,
   isGazeValid: boolean = true,
   dwellDeltaMs?: number,
-  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED'
+  dataOrigin: AnalyticsDataOrigin = 'PRODUCER_REPORTED',
+  sampleContinuity?: GazeSampleContinuity | null
 ): SustainedFixationTrialBody | null {
   if (state.completed) {
     return null;
@@ -537,13 +573,28 @@ export function stepSustainedFixationTrial(
 
   if (hovering && isGazeValid) {
     state.outsideGraceMs = 0;
-    state.insideTargetMs += effectiveDwellDelta;
-    state.currentContinuousInsideMs += effectiveDwellDelta;
+    if (!state.dwellContinuity) {
+      state.dwellContinuity = createEntityDwellContinuityState();
+    }
+    const rawStepDwell = accumulateEntityDwellWithContinuity(
+      state.dwellContinuity,
+      effectiveDwellDelta,
+      sampleContinuity
+    );
+    const stepDwell = Math.min(
+      Math.max(0, state.elapsedMs - state.insideTargetMs),
+      rawStepDwell
+    );
+    state.insideTargetMs += stepDwell;
+    state.currentContinuousInsideMs += stepDwell;
 
     if (state.currentContinuousInsideMs > state.longestContinuousInsideMs) {
       state.longestContinuousInsideMs = state.currentContinuousInsideMs;
     }
   } else {
+    if (state.dwellContinuity) {
+      resetEntityDwellContinuityState(state.dwellContinuity);
+    }
     state.outsideGraceMs += safeDeltaMs;
     if (state.outsideGraceMs > 90) {
       if (state.currentContinuousInsideMs > 0) {

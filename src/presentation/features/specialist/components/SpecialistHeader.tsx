@@ -288,7 +288,7 @@ export const SpecialistHeader: React.FC<SpecialistHeaderProps> = ({
 
   return (
     <header className="bg-white border-b border-[#071524]/10 sticky top-0 z-40 shadow-xs">
-      <div className="max-w-[1440px] mx-auto flex justify-between items-center w-full px-4 lg:px-6 xl:px-8 h-16 gap-3">
+      <div className="max-w-[1536px] mx-auto flex justify-between items-center w-full px-4 lg:px-6 xl:px-8 h-16 gap-3">
         {/* Brand & Hospital Unit Context */}
         <div
           onClick={() => onTabChange('pacientes')}
@@ -299,24 +299,24 @@ export const SpecialistHeader: React.FC<SpecialistHeaderProps> = ({
           </div>
           <div className="flex flex-col min-w-0">
             <div className="flex items-center gap-1.5 sm:gap-2">
-              <span className="text-base sm:text-lg xl:text-xl font-bold text-[#071524] tracking-tight whitespace-nowrap">
+              <span className="text-sm sm:text-base font-bold text-[#071524] tracking-tight whitespace-nowrap">
                 NeuroVisión Rehab
               </span>
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] xl:text-xs font-semibold bg-[#D5ECF8] text-[#006A62] border border-[#006A62]/20 whitespace-nowrap">
+              <span className="hidden 2xl:inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-semibold bg-[#D5ECF8] text-[#006A62] border border-[#006A62]/20 whitespace-nowrap">
                 PRO v4.8-FHIR
               </span>
             </div>
-            <p className="text-[11px] text-[#44474C] font-medium leading-tight truncate hidden lg:block max-w-[260px] xl:max-w-none">
-              <span className="hidden 2xl:inline">
-                Portal Facultativo · Unidad de Rehabilitación Visual y Campimetría
-              </span>
-              <span className="2xl:hidden">Portal Facultativo · Neuro-Oftalmología</span>
+            <p
+              title="Portal Facultativo · Unidad de Rehabilitación Visual y Campimetría"
+              className="hidden 2xl:block text-[11px] text-[#44474C] font-medium leading-tight truncate max-w-[235px]"
+            >
+              Portal Facultativo · Unidad de Rehabilitación Visual y Campimetría
             </p>
           </div>
         </div>
 
-        {/* Center Clinical Navigation Tabs (Laptop & Desktop) */}
-        <nav className="hidden lg:flex items-center gap-1 xl:gap-3 2xl:gap-6 h-full text-xs xl:text-sm font-semibold shrink min-w-0">
+        {/* Center Clinical Navigation Tabs (Desktop xl+) */}
+        <nav className="hidden xl:flex items-center gap-1 2xl:gap-2 h-full text-xs 2xl:text-[13px] font-semibold min-w-0 overflow-x-auto scrollbar-none">
           {navTabs.map((tab) => {
             const isActive = activeTab === tab.id;
             return (
@@ -324,7 +324,7 @@ export const SpecialistHeader: React.FC<SpecialistHeaderProps> = ({
                 key={tab.id}
                 type="button"
                 onClick={() => onTabChange(tab.id)}
-                className={`h-full flex items-center px-2 xl:px-2.5 pt-1 whitespace-nowrap transition-all relative cursor-pointer ${
+                className={`h-full flex items-center px-2 2xl:px-2.5 pt-1 whitespace-nowrap shrink-0 transition-all relative cursor-pointer ${
                   isActive
                     ? 'text-[#071524] font-bold border-b-4 border-[#006A62]'
                     : 'text-[#44474C] hover:text-[#071524]'
@@ -337,18 +337,18 @@ export const SpecialistHeader: React.FC<SpecialistHeaderProps> = ({
         </nav>
 
         {/* Trailing Action Icons & Doctor Pill Profile */}
-        <div className="flex items-center gap-1.5 sm:gap-2 xl:gap-2.5 shrink-0">
+        <div className="flex items-center gap-1.5 xl:gap-2 shrink-0">
           {/* Admin IAM Quick Action Button (Visible if user has ADMIN group or always readily available) */}
           {isAdmin && (
             <button
               type="button"
               onClick={handleOpenDoctorInviteModal}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#1C2A39] text-[#84F5E8] hover:bg-[#071524] text-[11px] xl:text-xs font-bold transition-colors cursor-pointer border border-[#84F5E8]/30 shadow-2xs"
+              className="inline-flex items-center gap-1.5 px-2.5 2xl:px-3 py-1.5 rounded-full bg-[#1C2A39] text-[#84F5E8] hover:bg-[#071524] text-[11px] 2xl:text-xs font-bold transition-colors cursor-pointer border border-[#84F5E8]/30 shadow-2xs whitespace-nowrap"
               title="Panel de Administración IAM: Invitar nuevo médico facultativo"
             >
               <UserPlus className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Invitar Médico</span>
-              <span className="sm:hidden">IAM</span>
+              <span className="hidden 2xl:inline">Invitar</span>
+              <span className="2xl:hidden">IAM</span>
             </button>
           )}
 
@@ -363,7 +363,7 @@ export const SpecialistHeader: React.FC<SpecialistHeaderProps> = ({
                   void refreshHealth();
                 }
               }}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border text-[11px] xl:text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border text-[11px] 2xl:text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
                 !isCognitoMode
                   ? 'bg-[#DBF1FE] border-[#C4C6CC]/40 text-[#071E27] hover:bg-[#cde8f8]'
                   : onlineServicesCount === totalServicesCount
@@ -372,7 +372,7 @@ export const SpecialistHeader: React.FC<SpecialistHeaderProps> = ({
                   ? 'bg-amber-50 border-amber-200 text-amber-900 hover:bg-amber-100'
                   : 'bg-red-50 border-red-200 text-red-900 hover:bg-red-100'
               }`}
-              title="Estado de microservicios backend (8081-8085)"
+              title={`Estado de microservicios backend (8081-8085): ${onlineServicesCount}/${totalServicesCount} servicios`}
             >
               <span
                 className={`w-2 h-2 rounded-full shrink-0 ${
@@ -388,7 +388,7 @@ export const SpecialistHeader: React.FC<SpecialistHeaderProps> = ({
               <span>
                 {!isCognitoMode
                   ? 'Modo Demo'
-                  : `${onlineServicesCount}/${totalServicesCount} servicios`}
+                  : `${onlineServicesCount}/${totalServicesCount}`}
               </span>
               <ChevronDown className="w-3.5 h-3.5 opacity-70 hidden sm:block" />
             </button>
@@ -560,7 +560,7 @@ export const SpecialistHeader: React.FC<SpecialistHeaderProps> = ({
           <button
             type="button"
             onClick={() => setActiveModal('help')}
-            className="p-2 rounded-lg hover:bg-[#F3FAFF] text-[#44474C] hover:text-[#071524] transition-colors cursor-pointer hidden sm:flex"
+            className="p-1.5 2xl:p-2 rounded-lg hover:bg-[#F3FAFF] text-[#44474C] hover:text-[#071524] transition-colors cursor-pointer hidden sm:flex"
             title="Soporte y Guías Clínicas"
           >
             <HelpCircle className="w-4 h-4 sm:w-5 sm:h-5" />
@@ -570,14 +570,14 @@ export const SpecialistHeader: React.FC<SpecialistHeaderProps> = ({
           <button
             type="button"
             onClick={() => setActiveModal('settings')}
-            className="p-2 rounded-lg hover:bg-[#F3FAFF] text-[#44474C] hover:text-[#071524] transition-colors cursor-pointer hidden sm:flex"
+            className="p-1.5 2xl:p-2 rounded-lg hover:bg-[#F3FAFF] text-[#44474C] hover:text-[#071524] transition-colors cursor-pointer hidden sm:flex"
             title="Configuración de guardia"
           >
             <Settings className="w-4 h-4 sm:w-5 sm:h-5" />
           </button>
 
           {/* Doctor Profile Pill */}
-          <div className="flex items-center gap-2 sm:gap-2.5 pl-1.5 sm:pl-2.5 border-l border-[#C4C6CC]/40 shrink-0">
+          <div className="flex items-center gap-1.5 sm:gap-2 pl-1.5 sm:pl-2 border-l border-[#C4C6CC]/40 shrink-0">
             <button
               type="button"
               onClick={() => {
@@ -597,17 +597,17 @@ export const SpecialistHeader: React.FC<SpecialistHeaderProps> = ({
                   <span className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-amber-500 border-2 border-white" />
                 )}
               </div>
-              <div className="hidden lg:block text-left text-xs leading-tight whitespace-nowrap">
+              <div className="hidden xl:block text-left text-xs leading-tight whitespace-nowrap">
                 <div className="font-bold text-[#071E27] flex items-center gap-1.5">
-                  <span className="hidden 2xl:inline max-w-[200px] truncate">
+                  <span className="hidden 2xl:inline max-w-[145px] truncate">
                     {doctorFullName}
                   </span>
-                  <span className="2xl:hidden max-w-[155px] truncate">
+                  <span className="2xl:hidden max-w-[120px] truncate">
                     {doctorShortName}
                   </span>
                   {isCognitoMode && (
                     <span
-                      className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
+                      className={`hidden 2xl:inline-flex px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
                         userProfile?.status === 'ACTIVE'
                           ? 'bg-emerald-100 text-emerald-800'
                           : 'bg-amber-100 text-amber-800'
@@ -618,7 +618,7 @@ export const SpecialistHeader: React.FC<SpecialistHeaderProps> = ({
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 text-[11px] text-[#44474C]">
-                  <span className="max-w-[120px] truncate">{doctorSpecialty}</span>
+                  <span className="max-w-[90px] 2xl:max-w-[115px] truncate">{doctorSpecialty}</span>
                   <span className="w-1.5 h-1.5 rounded-full bg-[#006A62]" />
                   {isCognitoMode ? (
                     <span className="text-[#006A62] font-semibold font-mono">
@@ -647,7 +647,7 @@ export const SpecialistHeader: React.FC<SpecialistHeaderProps> = ({
           <button
             type="button"
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="p-2 rounded-lg lg:hidden text-[#071524] hover:bg-[#F3FAFF] transition-colors cursor-pointer"
+            className="p-2 rounded-lg xl:hidden text-[#071524] hover:bg-[#F3FAFF] transition-colors cursor-pointer"
             aria-label="Abrir menú"
           >
             {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
@@ -658,7 +658,7 @@ export const SpecialistHeader: React.FC<SpecialistHeaderProps> = ({
       {/* Auto-Onboarding Alert Strip when Cognito doctor account needs IAM activation or CMP */}
       {needsOnboarding && (
         <div className="bg-amber-50 border-t border-amber-200 px-4 lg:px-6 xl:px-8 py-2">
-          <div className="max-w-[1440px] mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+          <div className="max-w-[1536px] mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
             <div className="flex items-center gap-2 text-amber-900">
               <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
               <span className="font-medium">
@@ -683,9 +683,9 @@ export const SpecialistHeader: React.FC<SpecialistHeaderProps> = ({
         </div>
       )}
 
-      {/* Mobile Drawer Navigation (Visible on screen < lg) */}
+      {/* Mobile Drawer Navigation (Visible on screen < xl) */}
       {mobileMenuOpen && (
-        <div className="lg:hidden bg-white border-t border-[#071524]/10 px-4 py-3 flex flex-col gap-2 shadow-md">
+        <div className="xl:hidden bg-white border-t border-[#071524]/10 px-4 py-3 flex flex-col gap-2 shadow-md">
           {navTabs.map((tab) => {
             const isActive = activeTab === tab.id;
             return (

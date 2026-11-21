@@ -481,22 +481,20 @@ export const PatientRecordPage: React.FC = () => {
       />
 
       {/* Main Container */}
-      <main className="flex-1 w-full max-w-[1440px] mx-auto px-4 md:px-8 py-6 flex flex-col gap-6">
+      <main className="flex-1 w-full max-w-[1536px] mx-auto px-4 lg:px-6 xl:px-8 py-6 flex flex-col gap-6">
         {/* Breadcrumb & Contextual Actions Bar */}
         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 sm:gap-4 pb-2 border-b border-[#071524]/10">
           {/* Back Link & Breadcrumb */}
-          <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 min-w-0">
             <button
               onClick={() => navigate('/specialist/dashboard')}
-              className="inline-flex items-center gap-1.5 text-[#006A62] font-semibold hover:underline text-xs sm:text-sm group cursor-pointer transition-colors whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-[#006A62]/25 text-[#006A62] font-semibold hover:bg-[#E6F6FF] text-xs sm:text-sm group cursor-pointer transition-colors whitespace-nowrap shrink-0"
             >
               <ArrowLeft className="w-4 h-4 group-hover:-translate-x-0.5 transition-transform shrink-0" />
               <span>Volver a Gestión de Pacientes</span>
             </button>
 
-            <span className="hidden sm:inline-block text-[#C4C6CC]">|</span>
-
-            <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs text-[#44474C] truncate">
+            <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs text-[#44474C] min-w-0 truncate">
               <span className="hidden md:inline whitespace-nowrap">Portal Clínico</span>
               <ChevronRight className="w-3 h-3 text-[#74777C] hidden md:inline shrink-0" />
               <span className="whitespace-nowrap">Pacientes</span>
@@ -634,11 +632,11 @@ export const PatientRecordPage: React.FC = () => {
         {/* Clinical Tabs Navigation */}
         <nav
           aria-label="Pestañas del expediente"
-          className="border-b border-[#071524]/15 flex gap-2 sm:gap-6 overflow-x-auto text-xs md:text-sm font-semibold scrollbar-none"
+          className="border-b border-[#071524]/15 flex gap-1.5 lg:gap-4 xl:gap-6 overflow-x-auto text-xs xl:text-sm font-semibold scrollbar-none"
         >
           <button
             onClick={() => setActiveTab('antecedentes')}
-            className={`py-3 px-2 flex items-center gap-2 whitespace-nowrap cursor-pointer transition-all ${
+            className={`py-2.5 px-2 flex items-center gap-1.5 whitespace-nowrap cursor-pointer transition-all ${
               activeTab === 'antecedentes'
                 ? 'text-[#071524] font-bold border-b-4 border-[#006A62]'
                 : 'text-[#44474C] hover:text-[#071524]'
@@ -652,7 +650,7 @@ export const PatientRecordPage: React.FC = () => {
 
           <button
             onClick={() => setActiveTab('plan')}
-            className={`py-3 px-2 flex items-center gap-2 whitespace-nowrap cursor-pointer transition-all ${
+            className={`py-2.5 px-2 flex items-center gap-1.5 whitespace-nowrap cursor-pointer transition-all ${
               activeTab === 'plan'
                 ? 'text-[#071524] font-bold border-b-4 border-[#006A62]'
                 : 'text-[#44474C] hover:text-[#071524]'
@@ -669,7 +667,7 @@ export const PatientRecordPage: React.FC = () => {
           {/* ACTIVE TAB DE STITCH: Historial de Sesiones & PDF */}
           <button
             onClick={() => setActiveTab('historial')}
-            className={`py-3 px-2 flex items-center gap-2 whitespace-nowrap cursor-pointer transition-all ${
+            className={`py-2.5 px-2 flex items-center gap-1.5 whitespace-nowrap cursor-pointer transition-all ${
               activeTab === 'historial'
                 ? 'text-[#071524] font-bold border-b-4 border-[#006A62]'
                 : 'text-[#44474C] hover:text-[#071524]'
@@ -684,7 +682,7 @@ export const PatientRecordPage: React.FC = () => {
 
           <button
             onClick={() => setActiveTab('campimetria')}
-            className={`py-3 px-2 flex items-center gap-2 whitespace-nowrap cursor-pointer transition-all ${
+            className={`py-2.5 px-2 flex items-center gap-1.5 whitespace-nowrap cursor-pointer transition-all ${
               activeTab === 'campimetria'
                 ? 'text-[#071524] font-bold border-b-4 border-[#006A62]'
                 : 'text-[#44474C] hover:text-[#071524]'

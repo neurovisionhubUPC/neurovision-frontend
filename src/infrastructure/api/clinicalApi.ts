@@ -1,4 +1,4 @@
-import { apiRequest, apiRequestBlob } from './httpClient';
+import { apiRequest, apiRequestBlob } from './httpClient.ts';
 import type {
   AppendTherapeuticConfigurationBody,
   AssignedPatientDetailResponse,
@@ -282,7 +282,8 @@ export const clinicalApi = {
 
   sendActivityEvent(
     therapySessionId: string,
-    body: PatientActivityEventBody
+    body: PatientActivityEventBody,
+    options?: { signal?: AbortSignal }
   ): Promise<PatientSessionProgressResponse> {
     return apiRequest<PatientSessionProgressResponse>(
       'clinical',
@@ -290,22 +291,27 @@ export const clinicalApi = {
       {
         method: 'POST',
         body,
+        signal: options?.signal,
       }
     );
   },
 
-  getSessionProgress(therapySessionId: string): Promise<PatientSessionProgressResponse> {
+  getSessionProgress(
+    therapySessionId: string,
+    options?: { signal?: AbortSignal }
+  ): Promise<PatientSessionProgressResponse> {
     return apiRequest<PatientSessionProgressResponse>(
       'clinical',
       `/api/v1/me/therapy-sessions/${encodeURIComponent(therapySessionId)}/progress`,
-      { method: 'GET' }
+      { method: 'GET', signal: options?.signal }
     );
   },
 
   completeSession(
     therapySessionId: string,
     body: PatientSessionCompletionBody,
-    idempotencyKey: string
+    idempotencyKey: string,
+    options?: { signal?: AbortSignal }
   ): Promise<PatientSessionProgressResponse> {
     return apiRequest<PatientSessionProgressResponse>(
       'clinical',
@@ -314,6 +320,7 @@ export const clinicalApi = {
         method: 'PUT',
         body,
         idempotencyKey,
+        signal: options?.signal,
       }
     );
   },

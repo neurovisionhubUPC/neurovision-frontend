@@ -83,7 +83,7 @@ export const SubHeaderStrip: React.FC<SubHeaderStripProps> = ({
   return (
     <>
       <div className="bg-white border-b border-[#071524]/5">
-        <div className="max-w-[1440px] mx-auto px-4 lg:px-6 xl:px-8 py-2 flex flex-wrap sm:flex-nowrap items-center justify-between gap-2 text-xs text-[#44474C]">
+        <div className="max-w-[1536px] mx-auto px-4 lg:px-6 xl:px-8 py-2 flex flex-wrap sm:flex-nowrap items-center justify-between gap-2 text-xs text-[#44474C]">
           {/* Breadcrumb Navigation Strip */}
           <nav aria-label="Ruta de navegación" className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-wrap">
             <button

@@ -19,6 +19,10 @@ import {
   Video,
 } from 'lucide-react';
 import { useEnvironmentalValidation } from '../../../../infrastructure/cv/hooks/useEnvironmentalValidation';
+import type {
+  ExerciseCompatibilityReport,
+  InferenceRateStatus,
+} from '../../../../infrastructure/therapy/captureCompatibility';
 
 interface PreCalibrationViewProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -28,7 +32,9 @@ interface PreCalibrationViewProps {
   onStartCalibration: () => void;
   onRetryCamera: (deviceId?: string) => void;
   rawMetricsRef: React.RefObject<any>;
-  fps?: number;
+  fps?: number | null;
+  inferenceRateStatus?: InferenceRateStatus;
+  captureCompatibility?: ExerciseCompatibilityReport | null;
   onEnableMouseFallback?: () => void;
 }
 
@@ -40,7 +46,9 @@ export const PreCalibrationView: React.FC<PreCalibrationViewProps> = ({
   onStartCalibration,
   onRetryCamera,
   rawMetricsRef,
-  fps = 60,
+  fps = null,
+  inferenceRateStatus = 'WARMING_UP',
+  captureCompatibility = null,
   onEnableMouseFallback,
 }) => {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
@@ -48,7 +56,12 @@ export const PreCalibrationView: React.FC<PreCalibrationViewProps> = ({
   const [showAssistModal, setShowAssistModal] = useState<boolean>(false);
 
   // Validación y Telemetría en tiempo real de luz, tapa y distancia (Zero Lag via Ref)
-  const validation = useEnvironmentalValidation(videoRef, isStreaming, rawMetricsRef);
+  const validation = useEnvironmentalValidation(
+    videoRef,
+    isStreaming,
+    rawMetricsRef,
+    fps ?? null
+  );
   const { camera, lighting, distance, canProceed, blockReason } = validation;
 
   // Cargar dispositivos de video disponibles
@@ -108,119 +121,129 @@ export const PreCalibrationView: React.FC<PreCalibrationViewProps> = ({
         {/* Left Column (5 Cols): Video feed & Device Selector */}
         <div className="lg:col-span-5 space-y-4">
           {/* Video Container Box */}
-          <div className="relative bg-[#0E1722] rounded-2xl overflow-hidden shadow-md border-2 border-[#1C2A39]/20 aspect-4/3 flex items-center justify-center">
-            
-            {/* Top Badges */}
-            <div className="absolute top-3.5 left-3.5 right-3.5 flex justify-between items-center z-20 pointer-events-none">
-              <span className={`inline-flex items-center space-x-2 text-[11px] font-bold px-3 py-1.5 rounded-lg border backdrop-blur-xs ${
-                camera.isCovered 
-                  ? 'bg-red-950/80 text-red-300 border-red-500/30' 
-                  : 'bg-[#1C2A39]/80 text-[#26A69A] border-white/10'
+          <div className="bg-[#0E1722] rounded-2xl overflow-hidden shadow-md border-2 border-[#1C2A39]/20 flex flex-col">
+            {/* Band 1: Top Status Header Bar */}
+            <div className="px-3.5 py-2.5 bg-[#0B131C] border-b border-white/10 flex flex-wrap items-center justify-between gap-2">
+              <span className={`inline-flex items-center space-x-2 text-[11px] font-bold px-2.5 py-1 rounded-lg border whitespace-nowrap ${
+                camera.isCovered
+                  ? 'bg-red-950/80 text-red-300 border-red-500/30'
+                  : 'bg-[#1C2A39]/90 text-[#26A69A] border-white/10'
               }`}>
-                <span className={`w-2 h-2 rounded-full ${camera.isCovered ? 'bg-red-400' : 'bg-[#26A69A] animate-ping'}`}></span>
-                <span>{camera.isCovered ? 'SENSOR BLOQUEADO' : `SENSOR OCULAR ACTIVO (${isStreaming ? `${fps} Hz` : 'Conectando...'})`}</span>
+                <span className={`w-2 h-2 rounded-full shrink-0 ${camera.isCovered ? 'bg-red-400' : 'bg-[#26A69A] animate-ping'}`}></span>
+                <span>
+                  {camera.isCovered
+                    ? 'SENSOR BLOQUEADO'
+                    : !isStreaming
+                    ? 'SENSOR OCULAR ACTIVO (Conectando...)'
+                    : typeof fps === 'number' && fps > 0
+                    ? `SENSOR OCULAR ACTIVO (${fps.toFixed(1)} Hz)`
+                    : 'SENSOR OCULAR ACTIVO (Midiendo Hz...)'}
+                </span>
               </span>
 
-              <span className={`inline-flex items-center space-x-1.5 text-[11px] font-bold px-3 py-1.5 rounded-lg border backdrop-blur-xs ${
-                distance.hasFace ? 'bg-[#1C2A39]/80 text-[#8AE2D6] border-white/10' : 'bg-[#1C2A39]/80 text-amber-300 border-amber-500/20'
+              <span className={`inline-flex items-center space-x-1.5 text-[11px] font-bold px-2.5 py-1 rounded-lg border whitespace-nowrap ${
+                distance.hasFace ? 'bg-[#1C2A39]/90 text-[#8AE2D6] border-white/10' : 'bg-[#1C2A39]/90 text-amber-300 border-amber-500/20'
               }`}>
-                <Sparkles size={13} />
+                <Sparkles size={13} className="shrink-0" />
                 <span>{distance.hasFace ? 'Rostro Enfocado' : 'Buscando Rostro'}</span>
               </span>
             </div>
 
-            {/* Video Stream Element */}
-            <video
-              ref={attachVideoElement ?? videoRef}
-              playsInline
-              muted
-              autoPlay
-              className="w-full h-full object-cover -scale-x-100 opacity-95"
-            />
+            {/* Band 2: Unobstructed Video Stage */}
+            <div className="relative aspect-4/3 w-full bg-[#0E1722] flex items-center justify-center overflow-hidden">
+              {/* Video Stream Element */}
+              <video
+                ref={attachVideoElement ?? videoRef}
+                playsInline
+                muted
+                autoPlay
+                className="w-full h-full object-cover -scale-x-100 opacity-95"
+              />
 
-            {/* Overlay Landmarks Canvas */}
-            <canvas
-              ref={pipCanvasRef}
-              width={640}
-              height={480}
-              className="absolute inset-0 w-full h-full object-cover -scale-x-100 pointer-events-none z-10"
-            />
+              {/* Overlay Landmarks Canvas */}
+              <canvas
+                ref={pipCanvasRef}
+                width={640}
+                height={480}
+                className="absolute inset-0 w-full h-full object-cover -scale-x-100 pointer-events-none z-10"
+              />
 
-            {/* Aviso si la cámara está tapada físicamente */}
-            {camera.isCovered && (
-              <div className="absolute inset-0 bg-black/85 backdrop-blur-xs flex flex-col items-center justify-center p-6 text-center z-25 text-white space-y-3">
-                <div className="w-12 h-12 rounded-full bg-red-600/30 text-red-400 flex items-center justify-center border border-red-500/40">
-                  <ShieldAlert size={28} />
-                </div>
-                <div className="space-y-1">
-                  <h4 className="font-bold text-base text-red-200">Tapa o Protector de Cámara Detectado</h4>
-                  <p className="text-xs text-neutral-300 max-w-xs leading-relaxed">
-                    No se recibe señal luminosa en el sensor. Retire la pestaña de privacidad física para habilitar el seguimiento ocular.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* Futuristic Alignment Hologram Overlay */}
-            {!camera.isCovered && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-15">
-                {/* Outer Head Silhouette Circle */}
-                <div className={`relative w-[240px] h-[300px] rounded-[120px] border-2 transition-all duration-300 flex items-center justify-center ${
-                  distance.hasFace 
-                    ? distance.status === 'OPTIMAL'
-                      ? 'border-[#26A69A]/90 shadow-[0_0_30px_rgba(38,166,154,0.4)]' 
-                      : 'border-amber-400/80 shadow-[0_0_20px_rgba(251,191,36,0.25)]'
-                    : 'border-white/30 border-dashed'
-                }`}>
-                  {/* Badge instruction above head */}
-                  <span className="absolute -top-3.5 bg-[#1C2A39]/90 text-white text-[11px] font-semibold px-3 py-1 rounded-full border border-white/20 backdrop-blur-xs">
-                    {distance.hasFace ? 'Rostro Detectado' : 'Alinee su rostro y ojos aquí'}
-                  </span>
-
-                  {/* Eye guide indicators */}
-                  <div className="flex items-center space-x-8 mt-2">
-                    <div className="flex flex-col items-center space-x-0.5">
-                      <div className={`w-12 h-10 rounded-xl border-2 flex items-center justify-center transition-all ${
-                        distance.hasFace ? 'border-[#26A69A] bg-[#26A69A]/15' : 'border-white/40'
-                      }`}>
-                        <div className={`w-2.5 h-2.5 rounded-full ${distance.hasFace ? 'bg-[#26A69A]' : 'bg-white/40'}`} />
-                      </div>
-                      <span className="text-[9px] font-bold tracking-widest text-[#8AE2D6] mt-1.5">
-                        OJO IZQ.
-                      </span>
-                    </div>
-
-                    <div className="flex flex-col items-center space-x-0.5">
-                      <div className={`w-12 h-10 rounded-xl border-2 flex items-center justify-center transition-all ${
-                        distance.hasFace ? 'border-[#26A69A] bg-[#26A69A]/15' : 'border-white/40'
-                      }`}>
-                        <div className={`w-2.5 h-2.5 rounded-full ${distance.hasFace ? 'bg-[#26A69A]' : 'bg-white/40'}`} />
-                      </div>
-                      <span className="text-[9px] font-bold tracking-widest text-[#8AE2D6] mt-1.5">
-                        OJO DER.
-                      </span>
-                    </div>
+              {/* Aviso si la cámara está tapada físicamente */}
+              {camera.isCovered && (
+                <div className="absolute inset-0 bg-black/85 backdrop-blur-xs flex flex-col items-center justify-center p-6 text-center z-25 text-white space-y-3">
+                  <div className="w-12 h-12 rounded-full bg-red-600/30 text-red-400 flex items-center justify-center border border-red-500/40">
+                    <ShieldAlert size={28} />
                   </div>
-
-                  {/* Nose / mouth subtle line */}
-                  <div className="absolute bottom-16 w-4 h-3 border-b-2 border-r-2 border-white/30 rounded-br-xs" />
+                  <div className="space-y-1">
+                    <h4 className="font-bold text-base text-red-200">Tapa o Protector de Cámara Detectado</h4>
+                    <p className="text-xs text-neutral-300 max-w-xs leading-relaxed">
+                      No se recibe señal luminosa en el sensor. Retire la pestaña de privacidad física para habilitar el seguimiento ocular.
+                    </p>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
 
-            {/* Medical Privacy Banner at the bottom */}
-            <div className="absolute bottom-3 left-3 right-3 bg-[#1C2A39]/90 backdrop-blur-xs text-white p-3 rounded-xl border border-white/10 z-20 flex items-start space-x-2.5 text-xs">
+              {/* Futuristic Alignment Hologram Overlay */}
+              {!camera.isCovered && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-15">
+                  {/* Proportional Head Silhouette Oval */}
+                  <div className={`relative w-[46%] max-w-[205px] h-[72%] max-h-[245px] rounded-[999px] border-2 transition-all duration-300 flex items-center justify-center ${
+                    distance.hasFace
+                      ? distance.status === 'OPTIMAL'
+                        ? 'border-[#26A69A]/90 shadow-[0_0_30px_rgba(38,166,154,0.4)]'
+                        : 'border-amber-400/80 shadow-[0_0_20px_rgba(251,191,36,0.25)]'
+                      : 'border-white/30 border-dashed'
+                  }`}>
+                    {/* Badge instruction above head */}
+                    <span className="absolute -top-3.5 bg-[#1C2A39]/90 text-white text-[11px] font-semibold px-3 py-1 rounded-full border border-white/20 backdrop-blur-xs whitespace-nowrap">
+                      {distance.hasFace ? 'Rostro Detectado' : 'Alinee su rostro y ojos aquí'}
+                    </span>
+
+                    {/* Eye guide indicators */}
+                    <div className="flex items-center space-x-5 sm:space-x-8 mt-2">
+                      <div className="flex flex-col items-center space-x-0.5">
+                        <div className={`w-10 h-8 sm:w-12 sm:h-10 rounded-xl border-2 flex items-center justify-center transition-all ${
+                          distance.hasFace ? 'border-[#26A69A] bg-[#26A69A]/15' : 'border-white/40'
+                        }`}>
+                          <div className={`w-2.5 h-2.5 rounded-full ${distance.hasFace ? 'bg-[#26A69A]' : 'bg-white/40'}`} />
+                        </div>
+                        <span className="text-[9px] font-bold tracking-widest text-[#8AE2D6] mt-1.5">
+                          OJO IZQ.
+                        </span>
+                      </div>
+
+                      <div className="flex flex-col items-center space-x-0.5">
+                        <div className={`w-10 h-8 sm:w-12 sm:h-10 rounded-xl border-2 flex items-center justify-center transition-all ${
+                          distance.hasFace ? 'border-[#26A69A] bg-[#26A69A]/15' : 'border-white/40'
+                        }`}>
+                          <div className={`w-2.5 h-2.5 rounded-full ${distance.hasFace ? 'bg-[#26A69A]' : 'bg-white/40'}`} />
+                        </div>
+                        <span className="text-[9px] font-bold tracking-widest text-[#8AE2D6] mt-1.5">
+                          OJO DER.
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Nose / mouth subtle line */}
+                    <div className="absolute bottom-10 sm:bottom-14 w-4 h-3 border-b-2 border-r-2 border-white/30 rounded-br-xs" />
+                  </div>
+                </div>
+              )}
+
+              {/* Corner Decorative Tech Brackets */}
+              <div className="absolute top-2 left-2 w-4 h-4 border-t-2 border-l-2 border-[#26A69A] pointer-events-none" />
+              <div className="absolute top-2 right-2 w-4 h-4 border-t-2 border-r-2 border-[#26A69A] pointer-events-none" />
+              <div className="absolute bottom-2 left-2 w-4 h-4 border-b-2 border-l-2 border-[#26A69A] pointer-events-none" />
+              <div className="absolute bottom-2 right-2 w-4 h-4 border-b-2 border-r-2 border-[#26A69A] pointer-events-none" />
+            </div>
+
+            {/* Band 3: Medical Privacy Banner outside video overlay */}
+            <div className="bg-[#132230] border-t border-white/10 text-white px-3.5 py-3 flex items-start gap-2.5 text-xs">
               <Lock size={15} className="text-[#26A69A] shrink-0 mt-0.5" />
               <p className="text-[11px] leading-relaxed text-neutral-200">
                 <strong className="text-white font-semibold">Privacidad Médica Garantizada:</strong> Su imagen nunca se graba ni se transmite por internet. El rastreo de la mirada se ejecuta de forma local y 100% segura en este equipo.
               </p>
             </div>
-
-            {/* Corner Decorative Tech Brackets */}
-            <div className="absolute top-2 left-2 w-4 h-4 border-t-2 border-l-2 border-[#26A69A] pointer-events-none" />
-            <div className="absolute top-2 right-2 w-4 h-4 border-t-2 border-r-2 border-[#26A69A] pointer-events-none" />
-            <div className="absolute bottom-2 left-2 w-4 h-4 border-b-2 border-l-2 border-[#26A69A] pointer-events-none" />
-            <div className="absolute bottom-2 right-2 w-4 h-4 border-b-2 border-r-2 border-[#26A69A] pointer-events-none" />
           </div>
 
           {/* Device Selection Card */}
@@ -281,7 +304,7 @@ export const PreCalibrationView: React.FC<PreCalibrationViewProps> = ({
               )}
             </div>
             <div className="flex-1 space-y-1.5">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <h4 className="text-sm sm:text-base font-bold text-[#1C2A39]">
                   1. Cámara detectada y activa
                 </h4>
@@ -310,7 +333,7 @@ export const PreCalibrationView: React.FC<PreCalibrationViewProps> = ({
               <Sun size={22} />
             </div>
             <div className="flex-1 space-y-2.5">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <h4 className="text-sm sm:text-base font-bold text-[#1C2A39]">
                   2. Iluminación de la habitación
                 </h4>
@@ -333,12 +356,12 @@ export const PreCalibrationView: React.FC<PreCalibrationViewProps> = ({
                     style={{ width: `${lighting.percentage}%` }}
                   />
                 </div>
-                <div className="flex justify-between text-[10px] text-[#455A64] font-semibold">
+                <div className="flex justify-between gap-2 text-[10px] text-[#455A64] font-semibold">
                   <span className={lighting.status === 'LOW' ? 'text-amber-700 font-bold' : ''}>Poca Luz</span>
-                  <span className={`uppercase tracking-wider ${lighting.status === 'OPTIMAL' ? 'text-[#0F6F62] font-bold' : ''}`}>
+                  <span className={`uppercase tracking-wider text-center ${lighting.status === 'OPTIMAL' ? 'text-[#0F6F62] font-bold' : ''}`}>
                     ZONA RECOMENDADA (250-550 Lux)
                   </span>
-                  <span className={lighting.status === 'EXCESSIVE' ? 'text-red-700 font-bold' : ''}>Exceso / Reflejo</span>
+                  <span className={`text-right ${lighting.status === 'EXCESSIVE' ? 'text-red-700 font-bold' : ''}`}>Exceso / Reflejo</span>
                 </div>
               </div>
             </div>
@@ -356,7 +379,7 @@ export const PreCalibrationView: React.FC<PreCalibrationViewProps> = ({
               <Layers size={20} />
             </div>
             <div className="flex-1 space-y-2.5">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <h4 className="text-sm sm:text-base font-bold text-[#1C2A39]">
                   3. Distancia del rostro (40 - 60 cm)
                 </h4>
@@ -389,12 +412,12 @@ export const PreCalibrationView: React.FC<PreCalibrationViewProps> = ({
                     />
                   )}
                 </div>
-                <div className="flex justify-between text-[10px] text-[#455A64] font-semibold">
+                <div className="flex justify-between gap-2 text-[10px] text-[#455A64] font-semibold">
                   <span className={distance.status === 'TOO_CLOSE' ? 'text-amber-700 font-bold' : ''}>Muy Cerca (&lt;38 cm)</span>
-                  <span className="font-bold text-[#1C2A39]">
+                  <span className="font-bold text-[#1C2A39] text-center">
                     {distance.hasFace ? `${distance.distanceCm} cm (Ideal: 50 cm)` : 'Esperando Rostro'}
                   </span>
-                  <span className={distance.status === 'TOO_FAR' ? 'text-amber-700 font-bold' : ''}>Muy Lejos (&gt;62 cm)</span>
+                  <span className={`text-right ${distance.status === 'TOO_FAR' ? 'text-amber-700 font-bold' : ''}`}>Muy Lejos (&gt;62 cm)</span>
                 </div>
               </div>
             </div>
@@ -413,6 +436,36 @@ export const PreCalibrationView: React.FC<PreCalibrationViewProps> = ({
         </div>
 
       </div>
+
+      {/* Inference Rate or Exercise Capture Compatibility Warning */}
+      {(inferenceRateStatus === 'BELOW_MIN_FPS' ||
+        (captureCompatibility && !captureCompatibility.compatible)) && (
+        <div className="bg-red-50 border border-red-200 text-red-900 p-4 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs sm:text-sm">
+          <div className="flex items-start space-x-2.5">
+            <AlertTriangle size={18} className="shrink-0 mt-0.5 text-red-600" />
+            <div className="space-y-1">
+              <strong className="block">
+                {inferenceRateStatus === 'BELOW_MIN_FPS'
+                  ? `Frecuencia de cámara insuficiente (${typeof fps === 'number' ? `${fps.toFixed(1)} Hz` : '< 4 Hz'} < 4.0 Hz mínimos)`
+                  : 'Compatibilidad de parámetros / captura'}
+              </strong>
+              <p className="text-xs text-red-800">
+                {captureCompatibility?.issues.find((i) => i.severity === 'ERROR')?.message ??
+                  'La frecuencia actual de inferencia ocular es menor a 4 Hz; mejore la iluminación frontal o cierre otras aplicaciones. También puede usar el modo de contingencia con ratón.'}
+              </p>
+            </div>
+          </div>
+          {onEnableMouseFallback && (
+            <button
+              type="button"
+              onClick={onEnableMouseFallback}
+              className="px-3.5 py-2 rounded-lg bg-[#1C2A39] hover:bg-[#131F2B] text-white text-xs font-bold shrink-0 cursor-pointer"
+            >
+              Usar Ratón Fallback
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Mandatory Condition Blocking Notice (si alguna condición no se cumple) */}
       {!canProceed && blockReason && (
@@ -509,9 +562,11 @@ export const PreCalibrationView: React.FC<PreCalibrationViewProps> = ({
                         ? 'La cámara está cubierta físicamente. Retira la tapa del sensor o la cinta de privacidad.'
                         : !isStreaming
                         ? 'El navegador aún no tiene permiso de video o no hay flujo activo.'
-                        : camera.passed
-                        ? `Video fluido a ${fps} FPS. Lente despejado y funcionando.`
-                        : camera.description}
+                        : typeof fps === 'number' && fps > 0
+                        ? fps < 4
+                          ? `Inferencia ocular medida a ${fps.toFixed(1)} Hz (< 4.0 Hz mínimos clínicos). Mejore iluminación o use el modo Ratón.`
+                          : `Inferencia ocular medida a ${fps.toFixed(1)} Hz. Lente despejado y funcionando.`
+                        : 'Cámara activa; midiendo frecuencia real de inferencia facial.'}
                     </p>
                   </div>
                 </div>

@@ -68,11 +68,15 @@ export const CalibrationOverlay: React.FC = () => {
   const currentPoint = CALIBRATION_POINTS[currentPointIndex];
 
   return (
-    <div className="absolute inset-0 bg-hc-black/90 z-40 flex items-center justify-center pointer-events-auto">
-      <div className="text-hc-white absolute top-10 text-center">
-        <h2 className="text-3xl font-bold text-hc-yellow mb-2">Calibración Oculomotora de Alta Precisión</h2>
-        <p className="text-xl">Mira fijamente el punto blanco en el centro del círculo rojo sin mover la cabeza.</p>
-        <p className="text-hc-gray mt-2">
+    <div className="fixed inset-0 bg-hc-black/95 z-50 flex items-center justify-center pointer-events-auto">
+      <div className="text-hc-white absolute top-[22%] left-1/2 -translate-x-1/2 w-full max-w-xl px-4 text-center pointer-events-none">
+        <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold text-hc-yellow mb-1.5">
+          Calibración Oculomotora de Alta Precisión
+        </h2>
+        <p className="text-sm sm:text-base lg:text-lg text-white/95">
+          Mira fijamente el punto blanco en el centro del círculo rojo sin mover la cabeza.
+        </p>
+        <p className="text-xs sm:text-sm text-white/75 font-semibold mt-2">
           Punto {currentPointIndex + 1} de {CALIBRATION_POINTS.length}
         </p>
       </div>

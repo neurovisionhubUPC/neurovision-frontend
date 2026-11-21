@@ -49,6 +49,7 @@ import {
   createUuid,
   extractApiErrorMessage,
   modeToAnalyticsSlug,
+  parseJwtClaims,
   telemetryApi,
   type AnyTrialBody,
   type FixationParameters,
@@ -64,10 +65,14 @@ import {
 import {
   GazeFreshnessGuard,
   MAX_GAZE_STALENESS_MS,
+  SUPPORTED_MIN_INFERENCE_FPS,
   type GazeFreshnessReason,
 } from '../../../../infrastructure/therapy/gazeFreshnessGuard';
 import {
+  isMatchingSessionProgress,
   SessionDeliveryController,
+  type ClinicalClosureStateDetail,
+  type PendingCriticalWorkSnapshot,
   type SessionSyncSummary,
 } from '../../../../infrastructure/telemetry/sessionDeliveryController';
 import {
@@ -90,6 +95,7 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { therapyAudio } from '../../../../infrastructure/therapy/therapyAudioFeedback';
+import { ClinicalTermTooltip } from '../../../shared/components/ClinicalTermTooltip';
 
 export interface Point2D {
   x: number;
@@ -106,12 +112,14 @@ export interface EyeTrackingGameCanvasProps {
   exerciseMode?: ReportMode;
   activeSession?: PatientTherapySessionResponse | null;
   sessionProgress?: PatientSessionProgressResponse | null;
+  accountKey?: string | null;
   gazeConfidenceRef?: React.MutableRefObject<number>;
   gazeSampleSeqRef?: React.MutableRefObject<number>;
   gazeLastValidPerfRef?: React.MutableRefObject<number>;
   gazeIsBlinkingRef?: React.MutableRefObject<boolean>;
   isWebcamStreaming?: boolean;
   mouseFallbackEnabled?: boolean;
+  measuredInferenceFps?: number | null;
   onToggleMouseFallback?: () => void;
   onSessionProgressUpdate?: (progress: PatientSessionProgressResponse) => void;
   onSessionCompleted?: (
@@ -119,6 +127,7 @@ export interface EyeTrackingGameCanvasProps {
     action: 'FINISHED' | 'ABANDONED'
   ) => void;
   onRequestNewSession?: () => void;
+  onPendingCriticalWorkChange?: (snapshot: PendingCriticalWorkSnapshot) => void;
 }
 
 type TrialSubPhase = 'INTER_STIMULUS_REST' | 'CENTRAL_ANCHOR' | 'ACTIVE_TRIAL';
@@ -144,9 +153,9 @@ interface ModuleSessionSummary {
   maxContinuousFixationMs: number;
   gamifiedPoints: number;
   maxStreak: number;
-  inputOrigin: 'WEBCAM_GAZE' | 'MOUSE_FALLBACK' | 'MIXED';
+  inputOrigin: 'WEBCAM_GAZE' | 'MOUSE_FALLBACK' | 'MIXED' | 'NONE';
   webcamSamplePercent: number;
-  reportedDataOrigin: 'PRODUCER_REPORTED' | 'SYNTHETIC' | 'MIXED';
+  reportedDataOrigin: 'PRODUCER_REPORTED' | 'SYNTHETIC' | 'MIXED' | 'NONE';
 }
 
 function createEmptySyncSummary(sessionId: string | null = null): SessionSyncSummary {
@@ -167,6 +176,26 @@ function createEmptySyncSummary(sessionId: string | null = null): SessionSyncSum
     hasPermanentDataLoss: false,
     isSyncComplete: true,
     lastWarning: null,
+  };
+}
+
+function createEmptyPendingWorkSnapshot(
+  sessionId: string | null = null,
+  accountKey: string | null = null
+): PendingCriticalWorkSnapshot {
+  return {
+    sessionId,
+    accountKey,
+    pendingTelemetryBatches: 0,
+    inFlightTelemetryBatches: 0,
+    bufferedTelemetrySamples: 0,
+    pendingTrials: 0,
+    uncertainTrials: 0,
+    inFlightTrials: 0,
+    hasActiveClosure: false,
+    hasUncertainClosure: false,
+    hasPendingCriticalWork: false,
+    isInMemoryOnly: true,
   };
 }
 
@@ -306,22 +335,34 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   exerciseMode,
   activeSession,
   sessionProgress,
+  accountKey,
   gazeConfidenceRef,
   gazeSampleSeqRef,
   gazeLastValidPerfRef,
   gazeIsBlinkingRef,
   isWebcamStreaming,
   mouseFallbackEnabled = false,
+  measuredInferenceFps = null,
   onToggleMouseFallback,
   onSessionProgressUpdate,
   onSessionCompleted,
   onRequestNewSession,
+  onPendingCriticalWorkChange,
 }) => {
   const navigate = useNavigate();
   const authMode = useAppStore((state) => state.authMode);
   const accessToken = useAppStore((state) => state.accessToken);
+  const userProfile = useAppStore((state) => state.userProfile);
+  const measuredInferenceFpsRef = useRef<number | null>(measuredInferenceFps);
+  measuredInferenceFpsRef.current = measuredInferenceFps;
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const hudPrimaryRef = useRef<HTMLSpanElement>(null);
+  const hudSecondaryRef = useRef<HTMLSpanElement>(null);
+  const hudWarningRef = useRef<HTMLSpanElement>(null);
+  const lastHudPrimaryRef = useRef<string>('');
+  const lastHudSecondaryRef = useRef<string>('');
+  const lastHudWarningRef = useRef<string>('');
   const requestRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
   const trajectoryRef = useRef<TrajectoryPoint[]>([]);
@@ -364,6 +405,13 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   const [syncSummary, setSyncSummary] = useState<SessionSyncSummary>(() =>
     createEmptySyncSummary(null)
   );
+  const [closureDetail, setClosureDetail] = useState<ClinicalClosureStateDetail | null>(null);
+  const [pendingExitIntent, setPendingExitIntent] = useState<'DASHBOARD' | 'NEW_SESSION' | null>(
+    null
+  );
+  const [pendingWorkSnapshot, setPendingWorkSnapshot] = useState<PendingCriticalWorkSnapshot>(
+    () => createEmptyPendingWorkSnapshot(null)
+  );
 
   const resolvedMode: ReportMode =
     exerciseMode ||
@@ -380,6 +428,12 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
 
   const isCognitoSession =
     authMode === 'COGNITO' && Boolean(accessToken) && Boolean(activeSessionId);
+
+  const resolvedAccountKey = useMemo(() => {
+    if (accountKey !== undefined) return accountKey;
+    if (authMode !== 'COGNITO' || !accessToken) return null;
+    return parseJwtClaims(accessToken).sub ?? userProfile?.id ?? null;
+  }, [accountKey, authMode, accessToken, userProfile?.id]);
 
   const { frozen: frozenParams, completionTarget } = useMemo(
     () => resolveSessionParams(prescription, resolvedMode, activeSession),
@@ -404,8 +458,15 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       ? Math.max(1, completionTarget.target)
       : null;
 
+  const initialMatchedProgress =
+    sessionProgress &&
+    activeSessionId &&
+    sessionProgress.therapySessionId === activeSessionId
+      ? sessionProgress
+      : null;
+
   // Clinical lifecycle refs (strictly ordered & race-free)
-  const nextSequenceRef = useRef<number>(sessionProgress?.nextSequence ?? 0);
+  const nextSequenceRef = useRef<number>(initialMatchedProgress?.nextSequence ?? 0);
   const eventQueueRef = useRef<Promise<void>>(Promise.resolve());
   const deliveryControllerRef = useRef<SessionDeliveryController | null>(null);
   const gazeFreshnessGuardRef = useRef(new GazeFreshnessGuard());
@@ -419,10 +480,12 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   const isBootstrappedRef = useRef<boolean>(false);
   const isCompletingRef = useRef<boolean>(false);
   const latestProgressRef = useRef<PatientSessionProgressResponse | null>(
-    sessionProgress ?? null
+    initialMatchedProgress
   );
 
-  const repetitionCounterRef = useRef<number>(sessionProgress?.completedRepetitions ?? 0);
+  const repetitionCounterRef = useRef<number>(
+    initialMatchedProgress?.completedRepetitions ?? 0
+  );
   const currentRepObjRef = useRef<{ id: string; index: number } | null>(null);
   const sessionHadCognitoRef = useRef<boolean>(false);
 
@@ -431,15 +494,60 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   const prevMouseFallbackRef = useRef<boolean>(mouseFallbackEnabled);
   const webcamGazeSamplesCountRef = useRef<number>(0);
   const mouseFallbackSamplesCountRef = useRef<number>(0);
+  const lastCountedWebcamSampleSeqRef = useRef<number>(-1);
 
-  // Sync incoming sessionProgress
+  // Publish pending critical work snapshot to parent and protect reload/tab-close while pending
   useEffect(() => {
-    if (sessionProgress) {
-      latestProgressRef.current = sessionProgress;
-    }
-  }, [sessionProgress]);
+    const snap =
+      deliveryControllerRef.current?.getPendingCriticalWorkSnapshot() ??
+      createEmptyPendingWorkSnapshot(activeSessionId, resolvedAccountKey);
+    setPendingWorkSnapshot(snap);
+    onPendingCriticalWorkChange?.(snap);
+  }, [
+    syncSummary,
+    completionState,
+    closureDetail,
+    activeSessionId,
+    resolvedAccountKey,
+    onPendingCriticalWorkChange,
+  ]);
 
-  // Reset lifecycle refs & initialize SessionDeliveryController when activeSessionId changes
+  useEffect(() => {
+    if (!pendingWorkSnapshot.hasPendingCriticalWork) return;
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [pendingWorkSnapshot.hasPendingCriticalWork]);
+
+  const sessionProgressPropRef = useRef<PatientSessionProgressResponse | null>(
+    sessionProgress ?? null
+  );
+  sessionProgressPropRef.current = sessionProgress ?? null;
+
+  // Sync incoming sessionProgress strictly only when its therapySessionId matches activeSessionId
+  useEffect(() => {
+    if (
+      sessionProgress &&
+      activeSessionId &&
+      sessionProgress.therapySessionId === activeSessionId
+    ) {
+      latestProgressRef.current = sessionProgress;
+      deliveryControllerRef.current?.setCachedProgress(sessionProgress);
+    } else if (
+      latestProgressRef.current &&
+      latestProgressRef.current.therapySessionId !== activeSessionId
+    ) {
+      latestProgressRef.current = null;
+      deliveryControllerRef.current?.clearCachedProgress();
+    }
+  }, [sessionProgress, activeSessionId]);
+
+  // Reset lifecycle refs & initialize SessionDeliveryController when activeSessionId or account changes
   useEffect(() => {
     const targetSessionId = isCognitoSession && activeSessionId ? activeSessionId : null;
 
@@ -469,25 +577,50 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
     }
 
     const controller = deliveryControllerRef.current;
+    const accountChanged = controller.getActiveAccountKey() !== resolvedAccountKey;
 
     if (!targetSessionId) {
       if (
-        completionStateRef.current !== 'FINISHED' &&
-        completionStateRef.current !== 'ABANDONED'
+        accountChanged ||
+        (completionStateRef.current !== 'FINISHED' &&
+          completionStateRef.current !== 'ABANDONED')
       ) {
-        controller.syncSession(null, localMouseFallbackRef.current);
+        controller.syncSession(null, {
+          initialMouseFallback: localMouseFallbackRef.current,
+          accountKey: resolvedAccountKey,
+        });
+        latestProgressRef.current = null;
+        if (accountChanged) {
+          sessionHadCognitoRef.current = false;
+          completionStateRef.current = 'IDLE';
+          setCompletionState('IDLE');
+          setClosureDetail(null);
+          setPendingExitIntent(null);
+          setBackendWarning(null);
+        }
         setSyncSummary(controller.getSyncSummary());
       }
       return;
     }
 
-    const sessionChanged = controller.syncSession(
-      targetSessionId,
-      localMouseFallbackRef.current
-    );
+    const sessionChanged = controller.syncSession(targetSessionId, {
+      initialMouseFallback: localMouseFallbackRef.current,
+      accountKey: resolvedAccountKey,
+    });
     if (sessionChanged) {
-      nextSequenceRef.current = latestProgressRef.current?.nextSequence ?? 0;
-      repetitionCounterRef.current = latestProgressRef.current?.completedRepetitions ?? 0;
+      const currentPropProgress = sessionProgressPropRef.current;
+      const matchingProgress =
+        currentPropProgress && currentPropProgress.therapySessionId === targetSessionId
+          ? currentPropProgress
+          : null;
+      latestProgressRef.current = matchingProgress;
+      if (matchingProgress) {
+        controller.setCachedProgress(matchingProgress);
+      } else {
+        controller.clearCachedProgress();
+      }
+      nextSequenceRef.current = matchingProgress?.nextSequence ?? 0;
+      repetitionCounterRef.current = matchingProgress?.completedRepetitions ?? 0;
       currentRepObjRef.current = null;
       sessionHadCognitoRef.current = false;
       isBootstrappedRef.current = false;
@@ -501,10 +634,12 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       sessionTrialOriginsRef.current = { producerReported: 0, synthetic: 0 };
       completionStateRef.current = 'IDLE';
       setCompletionState('IDLE');
+      setClosureDetail(null);
+      setPendingExitIntent(null);
       setBackendWarning(null);
       setSyncSummary(controller.getSyncSummary());
     }
-  }, [activeSessionId, isCognitoSession]);
+  }, [activeSessionId, isCognitoSession, resolvedAccountKey]);
 
   const enqueueActivityEvent = useCallback(
     (buildEvent: (seq: number) => PatientActivityEventBody): Promise<void> => {
@@ -526,9 +661,10 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         const payload = buildEvent(seq);
         try {
           let progress = await clinicalApi.sendActivityEvent(capturedCtx.sessionId, payload);
-          if (!isAdmitted()) return;
+          if (!isAdmitted() || !isMatchingSessionProgress(progress, capturedCtx.sessionId)) return;
           nextSequenceRef.current = progress.nextSequence;
           latestProgressRef.current = progress;
+          deliveryControllerRef.current?.setCachedProgress(progress, capturedCtx);
           repetitionCounterRef.current = progress.completedRepetitions;
           gameState.current.score = progress.completedRepetitions;
           gameState.current.activeElapsedMs = progress.activeMilliseconds;
@@ -548,9 +684,10 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               sequence: progress.nextSequence,
               type: 'RESUMED',
             });
-            if (!isAdmitted()) return;
+            if (!isAdmitted() || !isMatchingSessionProgress(progress, capturedCtx.sessionId)) return;
             nextSequenceRef.current = progress.nextSequence;
             latestProgressRef.current = progress;
+            deliveryControllerRef.current?.setCachedProgress(progress, capturedCtx);
             repetitionCounterRef.current = progress.completedRepetitions;
             gameState.current.score = progress.completedRepetitions;
 
@@ -569,9 +706,10 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                 repetitionId: repObj.id,
                 repetitionIndex: repObj.index,
               });
-              if (!isAdmitted()) return;
+              if (!isAdmitted() || !isMatchingSessionProgress(progress, capturedCtx.sessionId)) return;
               nextSequenceRef.current = progress.nextSequence;
               latestProgressRef.current = progress;
+              deliveryControllerRef.current?.setCachedProgress(progress, capturedCtx);
             }
           }
 
@@ -584,9 +722,10 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
           if (err instanceof ApiError && err.status === 409) {
             try {
               let synced = await clinicalApi.getSessionProgress(capturedCtx.sessionId);
-              if (!isAdmitted()) return;
+              if (!isAdmitted() || !isMatchingSessionProgress(synced, capturedCtx.sessionId)) return;
               nextSequenceRef.current = synced.nextSequence;
               latestProgressRef.current = synced;
+              deliveryControllerRef.current?.setCachedProgress(synced, capturedCtx);
               repetitionCounterRef.current = synced.completedRepetitions;
               gameState.current.score = synced.completedRepetitions;
               gameState.current.activeElapsedMs = synced.activeMilliseconds;
@@ -604,9 +743,10 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                   sequence: synced.nextSequence,
                   type: 'RESUMED',
                 });
-                if (!isAdmitted()) return;
+                if (!isAdmitted() || !isMatchingSessionProgress(synced, capturedCtx.sessionId)) return;
                 nextSequenceRef.current = synced.nextSequence;
                 latestProgressRef.current = synced;
+                deliveryControllerRef.current?.setCachedProgress(synced, capturedCtx);
 
                 if (gameState.current.subPhase !== 'INTER_STIMULUS_REST') {
                   const repObj = {
@@ -623,9 +763,10 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                     repetitionId: repObj.id,
                     repetitionIndex: repObj.index,
                   });
-                  if (!isAdmitted()) return;
+                  if (!isAdmitted() || !isMatchingSessionProgress(synced, capturedCtx.sessionId)) return;
                   nextSequenceRef.current = synced.nextSequence;
                   latestProgressRef.current = synced;
+                  deliveryControllerRef.current?.setCachedProgress(synced, capturedCtx);
                 }
               }
 
@@ -683,9 +824,9 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
     maxContinuousFixationMs: 0,
     gamifiedPoints: 0,
     maxStreak: 0,
-    inputOrigin: mouseFallbackEnabled ? 'MOUSE_FALLBACK' : 'WEBCAM_GAZE',
-    webcamSamplePercent: mouseFallbackEnabled ? 0 : 100,
-    reportedDataOrigin: mouseFallbackEnabled ? 'SYNTHETIC' : 'PRODUCER_REPORTED',
+    inputOrigin: mouseFallbackEnabled ? 'MOUSE_FALLBACK' : 'NONE',
+    webcamSamplePercent: 0,
+    reportedDataOrigin: mouseFallbackEnabled ? 'SYNTHETIC' : 'NONE',
   });
 
   const handleToggleMute = useCallback(() => {
@@ -885,7 +1026,9 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
             trialOrigin
           );
         }
-        const maxMs = Math.round((frozenParams as FixationParameters).maximumFixationMs);
+        const fixParams = frozenParams as FixationParameters;
+        const maxMs = Math.round(fixParams.maximumFixationMs);
+        const minFixMs = Math.round(fixParams.minimumFixationMs);
         const elapsedMs = Math.min(
           Math.max(1, maxMs - 1),
           Math.max(1, Math.round(s.trialElapsedMs))
@@ -893,6 +1036,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         const insideTargetMs = Math.min(elapsedMs, Math.max(0, Math.round(s.insideTargetMs)));
         const longestContinuousInsideMs = Math.min(
           insideTargetMs,
+          Math.max(0, minFixMs - 1),
           Math.max(0, Math.round(s.longestContinuousInsideMs))
         );
         return {
@@ -1051,30 +1195,31 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         ? 100
         : 0;
 
-    const isMouseFallbackNow = localMouseFallbackRef.current;
     const webcamSamples = webcamGazeSamplesCountRef.current;
     const mouseSamples = mouseFallbackSamplesCountRef.current;
     const totalOriginSamples = webcamSamples + mouseSamples;
-    const inputOrigin: 'WEBCAM_GAZE' | 'MOUSE_FALLBACK' | 'MIXED' =
+    const inputOrigin: 'WEBCAM_GAZE' | 'MOUSE_FALLBACK' | 'MIXED' | 'NONE' =
       webcamSamples > 0 && mouseSamples > 0
         ? 'MIXED'
-        : mouseSamples > 0 || isMouseFallbackNow
+        : webcamSamples > 0
+        ? 'WEBCAM_GAZE'
+        : mouseSamples > 0
         ? 'MOUSE_FALLBACK'
-        : 'WEBCAM_GAZE';
+        : 'NONE';
     const webcamSamplePercent =
       totalOriginSamples > 0
         ? Math.round((webcamSamples / totalOriginSamples) * 100)
-        : isMouseFallbackNow
-        ? 0
-        : 100;
+        : 0;
 
     const { producerReported, synthetic } = sessionTrialOriginsRef.current;
-    const reportedDataOrigin: 'PRODUCER_REPORTED' | 'SYNTHETIC' | 'MIXED' =
+    const reportedDataOrigin: 'PRODUCER_REPORTED' | 'SYNTHETIC' | 'MIXED' | 'NONE' =
       producerReported > 0 && synthetic > 0
         ? 'MIXED'
-        : synthetic > 0 || isMouseFallbackNow
+        : synthetic > 0
         ? 'SYNTHETIC'
-        : 'PRODUCER_REPORTED';
+        : producerReported > 0
+        ? 'PRODUCER_REPORTED'
+        : 'NONE';
 
     return {
       successfulTrials: s.score,
@@ -1091,42 +1236,74 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
     };
   }, []);
 
+  const buildClosureParams = useCallback(
+    () => ({
+      apis: {
+        getSessionProgress: (therapySessionId: string, options?: { signal?: AbortSignal }) =>
+          clinicalApi.getSessionProgress(therapySessionId, options),
+        completeSession: (
+          therapySessionId: string,
+          body: { action: 'FINISHED' | 'ABANDONED' },
+          idempotencyKey: string,
+          options?: { signal?: AbortSignal }
+        ) => clinicalApi.completeSession(therapySessionId, body, idempotencyKey, options),
+      },
+      adapter: {
+        isMounted: () => isMountedRef.current,
+        waitForActivityEvents: () => eventQueueRef.current,
+        getCachedProgress: () => latestProgressRef.current,
+        setCachedProgress: (progress: PatientSessionProgressResponse) => {
+          latestProgressRef.current = progress;
+        },
+        clearCachedProgress: () => {
+          latestProgressRef.current = null;
+        },
+        setSyncSummary: (summary: SessionSyncSummary) => {
+          setSyncSummary(summary);
+        },
+        setCompletionState: (
+          state: 'SAVING' | 'PENDING_SYNC' | 'FINISHED' | 'ABANDONED' | 'ERROR'
+        ) => {
+          completionStateRef.current = state;
+          setCompletionState(state);
+        },
+        setBackendWarning: (message: string) => {
+          setBackendWarning(message);
+        },
+        onClosureStateDetail: (detail: ClinicalClosureStateDetail) => {
+          setClosureDetail(detail);
+        },
+        onSessionProgressUpdate,
+        onSessionCompleted,
+        formatError: extractApiErrorMessage,
+      },
+    }),
+    [onSessionProgressUpdate, onSessionCompleted]
+  );
+
   const runCloseSessionFlow = useCallback(
     async (forceCloseWithoutSync: boolean) => {
       if (!isCognitoSession || !activeSessionId || !deliveryControllerRef.current) return;
 
       await deliveryControllerRef.current.closeClinicalSession({
         forceCloseWithoutSync,
-        apis: {
-          getSessionProgress: (therapySessionId) =>
-            clinicalApi.getSessionProgress(therapySessionId),
-          completeSession: (therapySessionId, body, idempotencyKey) =>
-            clinicalApi.completeSession(therapySessionId, body, idempotencyKey),
-        },
-        adapter: {
-          isMounted: () => isMountedRef.current,
-          waitForActivityEvents: () => eventQueueRef.current,
-          getCachedProgress: () => latestProgressRef.current,
-          setCachedProgress: (progress) => {
-            latestProgressRef.current = progress;
-          },
-          setSyncSummary: (summary) => {
-            setSyncSummary(summary);
-          },
-          setCompletionState: (state) => {
-            completionStateRef.current = state;
-            setCompletionState(state);
-          },
-          setBackendWarning: (message) => {
-            setBackendWarning(message);
-          },
-          onSessionProgressUpdate,
-          onSessionCompleted,
-          formatError: extractApiErrorMessage,
-        },
+        ...buildClosureParams(),
       });
     },
-    [isCognitoSession, activeSessionId, onSessionProgressUpdate, onSessionCompleted]
+    [isCognitoSession, activeSessionId, buildClosureParams]
+  );
+
+  const runRecoverSessionFlow = useCallback(
+    async (mode: 'VERIFY_ONLY' | 'VERIFY_AND_RESEND') => {
+      const controller = deliveryControllerRef.current;
+      if (!controller || !controller.getActiveSessionId()) return;
+
+      await controller.recoverClinicalClosure({
+        mode,
+        ...buildClosureParams(),
+      });
+    },
+    [buildClosureParams]
   );
 
   const finishSession = useCallback(
@@ -1251,7 +1428,12 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       }
 
       // Evaluate completion criteria
-      const serverReached = Boolean(latestProgressRef.current?.targetReached);
+      const serverReached = Boolean(
+        isCognitoSession &&
+          activeSessionId &&
+          latestProgressRef.current?.therapySessionId === activeSessionId &&
+          latestProgressRef.current?.targetReached
+      );
       const localRepGoalReached =
         requiredReps !== null && s.score >= requiredReps;
       const localTimeGoalReached =
@@ -1356,6 +1538,10 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       gameState.current.maxSessionContinuousFixationMs = 0;
       trajectoryRef.current = [];
       gazeFreshnessGuardRef.current.reset();
+      webcamGazeSamplesCountRef.current = 0;
+      mouseFallbackSamplesCountRef.current = 0;
+      lastCountedWebcamSampleSeqRef.current = -1;
+      sessionTrialOriginsRef.current = { producerReported: 0, synthetic: 0 };
       hasMousePointerMovedRef.current = false;
       trialUsedMouseFallbackRef.current = localMouseFallbackRef.current;
       setReport(null);
@@ -1388,7 +1574,13 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               clinicalApi.getPatientSessionDetail(capturedCtx.sessionId),
               clinicalApi.getSessionProgress(capturedCtx.sessionId),
             ]);
-            if (!isAdmitted()) return;
+            if (
+              !isAdmitted() ||
+              detail.therapySessionId !== capturedCtx.sessionId ||
+              !isMatchingSessionProgress(progress, capturedCtx.sessionId)
+            ) {
+              return;
+            }
 
             if (detail.technicalProgress) {
               gameState.current.activeElapsedMs = detail.technicalProgress.activeMilliseconds;
@@ -1399,6 +1591,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
             repetitionCounterRef.current = progress.completedRepetitions;
             gameState.current.score = progress.completedRepetitions;
             latestProgressRef.current = progress;
+            deliveryControllerRef.current?.setCachedProgress(progress, capturedCtx);
             currentRepObjRef.current = null;
 
             if (isMountedRef.current && isAdmitted()) {
@@ -1443,7 +1636,12 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                 sequence: progress.nextSequence,
                 type: 'PAUSED',
               });
-              if (!isAdmitted()) return;
+              if (
+                !isAdmitted() ||
+                !isMatchingSessionProgress(pausedProg, capturedCtx.sessionId)
+              ) {
+                return;
+              }
               activeProg = await clinicalApi.sendActivityEvent(capturedCtx.sessionId, {
                 schemaVersion: 1,
                 eventId: createUuid(),
@@ -1452,13 +1650,19 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               });
             }
 
-            if (!isAdmitted()) return;
+            if (
+              !isAdmitted() ||
+              !isMatchingSessionProgress(activeProg, capturedCtx.sessionId)
+            ) {
+              return;
+            }
 
             nextSequenceRef.current = activeProg.nextSequence;
             repetitionCounterRef.current = activeProg.completedRepetitions;
             gameState.current.score = activeProg.completedRepetitions;
             gameState.current.activeElapsedMs = activeProg.activeMilliseconds;
             latestProgressRef.current = activeProg;
+            deliveryControllerRef.current?.setCachedProgress(activeProg, capturedCtx);
 
             if (isMountedRef.current && isAdmitted()) {
               onSessionProgressUpdate?.(activeProg);
@@ -1480,9 +1684,15 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                 repetitionId: repObj.id,
                 repetitionIndex: repObj.index,
               });
-              if (!isAdmitted()) return;
+              if (
+                !isAdmitted() ||
+                !isMatchingSessionProgress(repProg, capturedCtx.sessionId)
+              ) {
+                return;
+              }
               nextSequenceRef.current = repProg.nextSequence;
               latestProgressRef.current = repProg;
+              deliveryControllerRef.current?.setCachedProgress(repProg, capturedCtx);
               if (isMountedRef.current && isAdmitted()) {
                 onSessionProgressUpdate?.(repProg);
               }
@@ -1701,6 +1911,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         sampleSeq: currentSampleSeq,
         isBlinking: gazeIsBlinkingRef?.current ?? false,
       });
+      const sampleContinuity = gazeFreshnessGuardRef.current.getLatestSampleContinuity();
 
       const isGazeSignalAvailable = guardEval.isSignalFresh;
       const currentConf = isMouseFallback ? 0.95 : rawGazeConfidence;
@@ -1760,20 +1971,27 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
             ctx.stroke();
           }
 
-          ctx.font = 'bold 20px Inter, sans-serif';
-          ctx.fillStyle = '#FFFFFF';
-          ctx.fillText(
-            `Calentamiento: ¡Sigue la luz mágica! (${s.calibrationIndex}/9)`,
-            20,
-            36
-          );
-          if (!isGazeSignalAvailable) {
-            const tutWarning =
-              getGazeWarningText(guardEval.reason) ??
-              '⚠️ Rostro o mirada no detectada — reubíquese frente a la cámara';
-            ctx.font = 'bold 14px Inter, sans-serif';
-            ctx.fillStyle = '#FACC15';
-            ctx.fillText(tutWarning, 20, 62);
+          const tutWarning = !isGazeSignalAvailable
+            ? getGazeWarningText(guardEval.reason) ??
+              '⚠️ Rostro o mirada no detectada — reubíquese frente a la cámara'
+            : '';
+          const tutPrimary = `Calentamiento: ¡Sigue la luz mágica! (${s.calibrationIndex}/9)`;
+          const tutSecondary = isMouseFallback
+            ? 'Origen: RATÓN FALLBACK · Fija cada círculo luminoso'
+            : 'Origen: MIRADA WEBCAM · Fija cada círculo luminoso';
+
+          if (hudPrimaryRef.current && lastHudPrimaryRef.current !== tutPrimary) {
+            lastHudPrimaryRef.current = tutPrimary;
+            hudPrimaryRef.current.textContent = tutPrimary;
+          }
+          if (hudSecondaryRef.current && lastHudSecondaryRef.current !== tutSecondary) {
+            lastHudSecondaryRef.current = tutSecondary;
+            hudSecondaryRef.current.textContent = tutSecondary;
+          }
+          if (hudWarningRef.current && lastHudWarningRef.current !== tutWarning) {
+            lastHudWarningRef.current = tutWarning;
+            hudWarningRef.current.textContent = tutWarning;
+            hudWarningRef.current.style.display = tutWarning ? 'inline-flex' : 'none';
           }
         }
       }
@@ -1793,20 +2011,36 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
           };
 
         if (!isPausedRef.current) {
-          if (isGazeSignalAvailable) {
+          const isActiveSampleWindow = s.subPhase !== 'INTER_STIMULUS_REST';
+          const isFreshUniqueWebcamSample =
+            !isMouseFallback &&
+            isGazeSignalAvailable &&
+            currentSampleSeq > 0 &&
+            currentSampleSeq !== lastCountedWebcamSampleSeqRef.current;
+
+          if (isGazeSignalAvailable && isActiveSampleWindow) {
             if (isMouseFallback) {
               mouseFallbackSamplesCountRef.current += 1;
-            } else {
+              trajectoryRef.current.push({
+                timestamp: time,
+                gaze: { x: normGazeX, y: normGazeY },
+                target: {
+                  x: clamp01(primaryEntity.x / width),
+                  y: clamp01(primaryEntity.y / height),
+                },
+              });
+            } else if (isFreshUniqueWebcamSample) {
+              lastCountedWebcamSampleSeqRef.current = currentSampleSeq;
               webcamGazeSamplesCountRef.current += 1;
+              trajectoryRef.current.push({
+                timestamp: time,
+                gaze: { x: normGazeX, y: normGazeY },
+                target: {
+                  x: clamp01(primaryEntity.x / width),
+                  y: clamp01(primaryEntity.y / height),
+                },
+              });
             }
-            trajectoryRef.current.push({
-              timestamp: time,
-              gaze: { x: normGazeX, y: normGazeY },
-              target: {
-                x: clamp01(primaryEntity.x / width),
-                y: clamp01(primaryEntity.y / height),
-              },
-            });
           }
 
           // Sample telemetry (~30 Hz)
@@ -1888,7 +2122,8 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               p,
               isGazeSignalAvailable,
               guardEval.effectiveDwellDeltaMs,
-              trialOrigin
+              trialOrigin,
+              sampleContinuity
             );
             s.entities = [s.standardState.target];
             if (s.standardState.target.dwellTimeMs > 60) {
@@ -1910,7 +2145,8 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               p,
               isGazeSignalAvailable,
               guardEval.effectiveDwellDeltaMs,
-              trialOrigin
+              trialOrigin,
+              sampleContinuity
             );
             if (s.explorationState.currentStepIndex > prevStep && !res) {
               const completedWp =
@@ -1948,7 +2184,8 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               p,
               isGazeSignalAvailable,
               guardEval.effectiveDwellDeltaMs,
-              trialOrigin
+              trialOrigin,
+              sampleContinuity
             );
             if (s.saccadeState.phase === 'CENTRAL_ANCHOR') {
               s.subPhase = 'CENTRAL_ANCHOR';
@@ -1992,7 +2229,8 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               p,
               isGazeSignalAvailable,
               guardEval.effectiveDwellDeltaMs,
-              trialOrigin
+              trialOrigin,
+              sampleContinuity
             );
             const foundTargetsNow = s.searchState.entities.filter(
               (e) => e.kind === 'TARGET' && e.found
@@ -2033,7 +2271,8 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               p,
               isGazeSignalAvailable,
               guardEval.effectiveDwellDeltaMs,
-              trialOrigin
+              trialOrigin,
+              sampleContinuity
             );
             s.insideTargetMs = s.fixationState.insideTargetMs;
             s.currentContinuousInsideMs = s.fixationState.currentContinuousInsideMs;
@@ -2309,46 +2548,62 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
           }
         }
 
-        // HUD Overlay inside Canvas
-        ctx.fillStyle = '#FFFFFF';
-        ctx.font = 'bold 18px Inter, sans-serif';
+        // Sync HUD bar above Canvas (zero overlap with targets + zero React re-renders)
         const goalLabel =
           requiredReps !== null
             ? `Repeticiones: ${s.score} / ${requiredReps}`
             : `Tiempo Activo: ${Math.floor(s.activeElapsedMs / 1000)}s / ${timeTargetSeconds}s`;
-        ctx.fillText(`${goalLabel}  ·  ${resolvedMode}`, 20, 34);
-
-        ctx.font = 'bold 13px Inter, sans-serif';
-        ctx.fillStyle = s.streak >= 2 ? '#FACC15' : '#CBD5E1';
-        ctx.fillText(
-          `⭐ ${s.gamifiedPoints} pts   ·   🔥 Racha: x${s.streak} (Máx x${s.maxStreak})`,
-          20,
-          56
-        );
-
-        ctx.font = '13px monospace';
-        ctx.fillStyle = '#8AE2D6';
         const distPrimary = Math.hypot(primaryEntity.x - cursorX, primaryEntity.y - cursorY);
+        const anchorRemainingSec =
+          s.subPhase === 'CENTRAL_ANCHOR' && s.saccadeState
+            ? Math.max(
+                0,
+                (s.saccadeState.anchorTimeoutMs - s.saccadeState.anchorElapsedMs) / 1000
+              )
+            : null;
         const subHint =
           s.subPhase === 'CENTRAL_ANCHOR'
-            ? 'Fije la cruz central para disparar la sacada'
+            ? anchorRemainingSec !== null
+              ? `Fije la cruz central (${anchorRemainingSec.toFixed(1)}s)`
+              : 'Fije la cruz central para disparar la sacada'
             : resolvedMode === 'TARGET_SEARCH_WITH_DISTRACTORS'
             ? `Objetivos pendientes: ${
                 s.entities.filter((e) => e.kind === 'TARGET' && !e.found).length
               }`
             : `Error distancia: ${Math.round(distPrimary)} px`;
+        const liveFps = measuredInferenceFpsRef.current;
         const inputOriginHint = isMouseFallback
           ? 'Origen: RATÓN FALLBACK (gameplaySamples)'
-          : `Origen: MIRADA WEBCAM (conf ${(rawGazeConfidence * 100).toFixed(0)}%)`;
-        ctx.fillText(`${subHint}  ·  ${inputOriginHint}`, 20, 76);
+          : `Origen: MIRADA WEBCAM (conf ${(rawGazeConfidence * 100).toFixed(0)}%${
+              liveFps !== null && liveFps > 0 ? ` · ${liveFps.toFixed(1)} Hz` : ''
+            })`;
 
-        if (!isGazeSignalAvailable) {
-          const mainWarning =
-            getGazeWarningText(guardEval.reason) ??
-            '⚠️ Rostro/mirada no detectada — reubíquese frente a la cámara (acumulación en pausa)';
-          ctx.font = 'bold 14px Inter, sans-serif';
-          ctx.fillStyle = '#FACC15';
-          ctx.fillText(mainWarning, 20, 98);
+        const mainPrimary = `${goalLabel}  ·  ${resolvedMode}`;
+        const mainSecondary = `⭐ ${s.gamifiedPoints} pts  ·  🔥 Racha: x${s.streak} (Máx x${s.maxStreak})  ·  ${subHint}  ·  ${inputOriginHint}`;
+        const lowFpsWarning =
+          !isMouseFallback &&
+          liveFps !== null &&
+          liveFps > 0 &&
+          liveFps < SUPPORTED_MIN_INFERENCE_FPS
+            ? `⚠️ Inferencia real ${liveFps.toFixed(1)} Hz (< ${SUPPORTED_MIN_INFERENCE_FPS} Hz mínimos) — fijaciones continuas comprometidas`
+            : '';
+        const mainWarning = !isGazeSignalAvailable
+          ? getGazeWarningText(guardEval.reason) ??
+            '⚠️ Rostro/mirada no detectada — reubíquese frente a la cámara (acumulación en pausa)'
+          : lowFpsWarning;
+
+        if (hudPrimaryRef.current && lastHudPrimaryRef.current !== mainPrimary) {
+          lastHudPrimaryRef.current = mainPrimary;
+          hudPrimaryRef.current.textContent = mainPrimary;
+        }
+        if (hudSecondaryRef.current && lastHudSecondaryRef.current !== mainSecondary) {
+          lastHudSecondaryRef.current = mainSecondary;
+          hudSecondaryRef.current.textContent = mainSecondary;
+        }
+        if (hudWarningRef.current && lastHudWarningRef.current !== mainWarning) {
+          lastHudWarningRef.current = mainWarning;
+          hudWarningRef.current.textContent = mainWarning;
+          hudWarningRef.current.style.display = mainWarning ? 'inline-flex' : 'none';
         }
       }
 
@@ -2490,6 +2745,116 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
     }
 
     if (completionState === 'ERROR') {
+      if (closureDetail?.kind === 'PROGRESS_UNAVAILABLE') {
+        return (
+          <div className="w-full space-y-2.5 text-left">
+            <div className="flex items-start gap-2 text-amber-300 font-bold">
+              <AlertTriangle size={15} className="shrink-0 mt-0.5 text-red-400" />
+              <span>{closureDetail.message}</span>
+            </div>
+            <p className="text-[11px] text-white/75">
+              No se usó progreso en caché de ninguna otra sesión ni se envió cierre al servidor.
+            </p>
+            <button
+              type="button"
+              onClick={() => void runCloseSessionFlow(false)}
+              className="px-3 py-1.5 rounded-lg bg-[#26A69A] hover:bg-[#1E8A80] text-[#0E1722] font-bold text-xs transition-colors cursor-pointer"
+            >
+              Reintentar lectura de progreso y cerrar
+            </button>
+          </div>
+        );
+      }
+
+      if (
+        closureDetail?.kind === 'UNCERTAIN_COMPLETION' ||
+        closureDetail?.kind === 'OBSERVED_SERVER_STATE'
+      ) {
+        return (
+          <div className="w-full space-y-2.5 text-left">
+            <div className="flex items-start gap-2 text-amber-300 font-bold">
+              <AlertTriangle size={15} className="shrink-0 mt-0.5 text-amber-400" />
+              <span>{closureDetail.message}</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[11px] text-white/85">
+              <span>
+                Estado observado en servidor:{' '}
+                <strong>{closureDetail.observedServerStatus ?? 'DESCONOCIDO'}</strong>
+              </span>
+              <span>
+                Comprobante de esta operación:{' '}
+                <strong>
+                  {closureDetail.receiptAcknowledged ? 'CONFIRMADO' : 'NO CONFIRMADO'}
+                </strong>
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void runRecoverSessionFlow('VERIFY_ONLY')}
+                className="px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-white font-semibold text-xs transition-colors cursor-pointer"
+              >
+                Verificar estado en servidor
+              </button>
+              {closureDetail.canRecoverWithSameKey && (
+                <button
+                  type="button"
+                  onClick={() => void runRecoverSessionFlow('VERIFY_AND_RESEND')}
+                  className="px-3 py-1.5 rounded-lg bg-[#26A69A] hover:bg-[#1E8A80] text-[#0E1722] font-bold text-xs transition-colors cursor-pointer"
+                >
+                  Verificar y reconfirmar cierre (misma clave)
+                </button>
+              )}
+            </div>
+            <p className="text-[10px] text-white/65 leading-relaxed">
+              La solicitud anterior puede estar aún ejecutándose de forma remota. El reenvío conserva
+              exactamente la misma sesión, clave idempotente y acción.
+            </p>
+          </div>
+        );
+      }
+
+      if (closureDetail?.kind === 'CONFLICT') {
+        return (
+          <div className="w-full space-y-2 text-left">
+            <div className="flex items-start gap-2 text-red-300 font-bold">
+              <AlertTriangle size={15} className="shrink-0 mt-0.5" />
+              <span>{closureDetail.message}</span>
+            </div>
+            <p className="text-[11px] text-white/75">
+              Estado observado en servidor:{' '}
+              <strong>{closureDetail.observedServerStatus ?? 'DESCONOCIDO'}</strong>. No se
+              generará una clave nueva ni se reintentará automáticamente.
+            </p>
+            <button
+              type="button"
+              onClick={() => void runRecoverSessionFlow('VERIFY_ONLY')}
+              className="px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-white font-semibold text-xs transition-colors cursor-pointer"
+            >
+              Actualizar estado observado
+            </button>
+          </div>
+        );
+      }
+
+      if (closureDetail?.kind === 'AUTH_ERROR') {
+        return (
+          <div className="w-full space-y-2 text-left">
+            <div className="flex items-start gap-2 text-red-300 font-bold">
+              <AlertTriangle size={15} className="shrink-0 mt-0.5" />
+              <span>{closureDetail.message}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void runRecoverSessionFlow('VERIFY_AND_RESEND')}
+              className="px-3 py-1.5 rounded-lg bg-red-500/80 hover:bg-red-500 text-white font-bold text-xs transition-colors cursor-pointer"
+            >
+              Reintentar recuperación (misma clave)
+            </button>
+          </div>
+        );
+      }
+
       return (
         <div className="w-full space-y-2 text-left">
           <div className="flex items-center gap-2 text-red-300 font-bold">
@@ -2498,8 +2863,8 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
           </div>
           <button
             type="button"
-            onClick={() => void runCloseSessionFlow(true)}
-            className="px-3 py-1.5 rounded-lg bg-red-500/80 hover:bg-red-500 text-white font-bold text-xs transition-colors"
+            onClick={() => void runRecoverSessionFlow('VERIFY_AND_RESEND')}
+            className="px-3 py-1.5 rounded-lg bg-red-500/80 hover:bg-red-500 text-white font-bold text-xs transition-colors cursor-pointer"
           >
             Reintentar cierre clínico
           </button>
@@ -2605,92 +2970,120 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   };
 
   return (
-    <div className="relative flex justify-center items-center rounded-2xl overflow-hidden border-4 border-neutral/30 shadow-2xl transition-all bg-black">
-      <canvas
-        ref={canvasRef}
-        width={width}
-        height={height}
-        onPointerMove={handlePointerMove}
-        className="block w-full h-auto bg-hc-black"
-        style={{ touchAction: 'none', cursor: localMouseFallback ? 'crosshair' : 'default' }}
-      />
-
-      {/* Non-blocking backend warning badge */}
-      {backendWarning && gamePhase === 'MAIN_GAME' && (
-        <div className="absolute bottom-3 left-3 right-3 sm:right-auto max-w-md bg-amber-950/90 border border-amber-500/40 text-amber-200 px-3 py-1.5 rounded-lg text-[11px] flex items-center space-x-2 z-20">
-          <AlertTriangle size={14} className="shrink-0 text-amber-400" />
-          <span className="truncate">{backendWarning}</span>
+    <div className="flex flex-col rounded-2xl overflow-hidden border-2 border-white/15 shadow-2xl transition-all bg-[#070B12] w-full">
+      {/* Slim dedicated HUD bar above Canvas (prevents overlapping targets & action buttons) */}
+      <div className="bg-[#0B131C] border-b border-white/10 px-3.5 py-2 flex flex-wrap items-center justify-between gap-2 min-h-[48px]">
+        <div className="min-w-0 flex-1 flex flex-col gap-0.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              ref={hudPrimaryRef}
+              className="text-xs sm:text-sm font-bold text-white tracking-tight truncate"
+            >
+              {gamePhase === 'CALIBRATION'
+                ? 'Calibración ocular de 9 puntos'
+                : 'Preparando ejercicio...'}
+            </span>
+            <span
+              ref={hudWarningRef}
+              style={{ display: 'none' }}
+              className="items-center px-2 py-0.5 rounded-md bg-amber-500/20 border border-amber-400/40 text-amber-300 text-[11px] font-bold"
+            />
+          </div>
+          <span
+            ref={hudSecondaryRef}
+            className="text-[11px] font-mono text-[#8AE2D6] truncate"
+          />
         </div>
-      )}
 
-      {/* Action Controls during MAIN_GAME */}
-      {gamePhase === 'MAIN_GAME' && (
-        <div className="absolute top-3.5 right-3.5 flex items-center space-x-2 z-20">
-          <button
-            onClick={handleToggleMute}
-            title={isMuted ? 'Activar retroalimentación sonora espacial' : 'Silenciar audio'}
-            className={`px-3 py-2 text-xs font-bold rounded-lg shadow-md flex items-center space-x-1.5 transition-colors ${
-              !isMuted
-                ? 'bg-[#26A69A]/25 border border-[#26A69A]/50 text-[#8AE2D6]'
-                : 'bg-white/15 hover:bg-white/25 text-white/70'
-            }`}
-          >
-            {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
-            <span className="hidden sm:inline">{isMuted ? 'Audio OFF' : 'Audio 3D'}</span>
-          </button>
-
-          {!onToggleMouseFallback && (
+        {/* Action Controls during MAIN_GAME */}
+        {gamePhase === 'MAIN_GAME' && (
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 shrink-0">
             <button
-              onClick={handleToggleMouse}
-              className={`px-3 py-2 text-xs font-bold rounded-lg shadow-md flex items-center space-x-1.5 transition-colors ${
-                localMouseFallback
-                  ? 'bg-[#26A69A] text-[#0E1722]'
-                  : 'bg-white/15 hover:bg-white/25 text-white'
+              onClick={handleToggleMute}
+              title={isMuted ? 'Activar retroalimentación sonora espacial' : 'Silenciar audio'}
+              className={`px-2.5 py-1.5 text-xs font-bold rounded-lg flex items-center space-x-1.5 transition-colors cursor-pointer ${
+                !isMuted
+                  ? 'bg-[#26A69A]/25 border border-[#26A69A]/50 text-[#8AE2D6]'
+                  : 'bg-white/15 hover:bg-white/25 text-white/70'
               }`}
             >
-              <MousePointer2 size={14} />
-              <span>{localMouseFallback ? 'Ratón ON' : 'Ratón'}</span>
+              {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+              <span className="hidden sm:inline">{isMuted ? 'Audio OFF' : 'Audio 3D'}</span>
             </button>
-          )}
 
-          <button
-            onClick={handleTogglePause}
-            className="px-3.5 py-2 bg-white/15 hover:bg-white/25 text-white text-xs sm:text-sm font-semibold rounded-lg shadow-md flex items-center space-x-1.5 transition-colors"
-          >
-            {isPaused ? <Play size={14} /> : <Pause size={14} />}
-            <span>{isPaused ? 'Reanudar' : 'Pausar'}</span>
-          </button>
+            {!onToggleMouseFallback && (
+              <button
+                onClick={handleToggleMouse}
+                className={`px-2.5 py-1.5 text-xs font-bold rounded-lg flex items-center space-x-1.5 transition-colors cursor-pointer ${
+                  localMouseFallback
+                    ? 'bg-[#26A69A] text-[#0E1722]'
+                    : 'bg-white/15 hover:bg-white/25 text-white'
+                }`}
+              >
+                <MousePointer2 size={14} />
+                <span>{localMouseFallback ? 'Ratón ON' : 'Ratón'}</span>
+              </button>
+            )}
 
-          <button
-            onClick={() => void finishSession('USER_EXIT')}
-            className="px-4 py-2 bg-neutral/85 hover:bg-neutral text-white text-xs sm:text-sm font-semibold rounded-lg shadow-md transition-colors"
-          >
-            Finalizar Ejercicio
-          </button>
-        </div>
-      )}
+            <button
+              onClick={handleTogglePause}
+              className="px-3 py-1.5 bg-white/15 hover:bg-white/25 text-white text-xs font-semibold rounded-lg flex items-center space-x-1.5 transition-colors cursor-pointer"
+            >
+              {isPaused ? <Play size={14} /> : <Pause size={14} />}
+              <span>{isPaused ? 'Reanudar' : 'Pausar'}</span>
+            </button>
 
-      {/* Pause Overlay */}
-      {gamePhase === 'MAIN_GAME' && isPaused && (
-        <div className="absolute inset-0 bg-black/75 backdrop-blur-xs flex flex-col items-center justify-center z-20 space-y-4">
-          <h3 className="text-2xl font-bold text-white">Sesión en Pausa</h3>
-          <p className="text-sm text-white/75">
-            Descansa tus ojos un momento. Pulsa reanudar cuando estés listo.
-          </p>
-          <button
-            onClick={handleTogglePause}
-            className="px-6 py-3 bg-[#26A69A] hover:bg-[#1E8A80] text-[#0E1722] font-bold rounded-xl flex items-center space-x-2"
-          >
-            <Play size={18} className="fill-current" />
-            <span>Reanudar Terapia</span>
-          </button>
-        </div>
-      )}
+            <button
+              onClick={() => void finishSession('USER_EXIT')}
+              className="px-3 py-1.5 bg-[#B85D19] hover:bg-[#974911] text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+            >
+              Finalizar Ejercicio
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Unobstructed 16:9 Canvas Stage */}
+      <div className="relative w-full aspect-video bg-hc-black">
+        <canvas
+          ref={canvasRef}
+          width={width}
+          height={height}
+          onPointerMove={handlePointerMove}
+          className="block w-full h-full bg-hc-black"
+          style={{ touchAction: 'none', cursor: localMouseFallback ? 'crosshair' : 'default' }}
+        />
+
+        {/* Non-blocking backend warning badge */}
+        {backendWarning && gamePhase === 'MAIN_GAME' && (
+          <div className="absolute bottom-3 left-3 right-3 sm:right-auto max-w-md bg-amber-950/90 border border-amber-500/40 text-amber-200 px-3 py-1.5 rounded-lg text-[11px] flex items-center space-x-2 z-20">
+            <AlertTriangle size={14} className="shrink-0 text-amber-400" />
+            <span className="truncate">{backendWarning}</span>
+          </div>
+        )}
+
+        {/* Pause Overlay */}
+        {gamePhase === 'MAIN_GAME' && isPaused && (
+          <div className="absolute inset-0 bg-black/75 backdrop-blur-xs flex flex-col items-center justify-center z-20 space-y-4">
+            <h3 className="text-2xl font-bold text-white">Sesión en Pausa</h3>
+            <p className="text-sm text-white/75">
+              Descansa tus ojos un momento. Pulsa reanudar cuando estés listo.
+            </p>
+            <button
+              onClick={handleTogglePause}
+              className="px-6 py-3 bg-[#26A69A] hover:bg-[#1E8A80] text-[#0E1722] font-bold rounded-xl flex items-center space-x-2 cursor-pointer"
+            >
+              <Play size={18} className="fill-current" />
+              <span>Reanudar Terapia</span>
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Finished / Clinical Report Overlay */}
       {gamePhase === 'FINISHED' && report && (
-        <div className="absolute inset-0 bg-primary/95 text-white flex flex-col items-center justify-center p-6 sm:p-8 z-30 overflow-y-auto">
-          <div className="bg-bgSecondary/10 border border-white/20 rounded-2xl p-6 sm:p-8 max-w-xl w-full text-center shadow-2xl backdrop-blur-sm space-y-5">
+        <div className="fixed inset-0 bg-primary/95 text-white flex items-start justify-center p-4 sm:p-6 z-[80] overflow-y-auto">
+          <div className="bg-bgSecondary/10 border border-white/20 rounded-2xl p-6 sm:p-8 max-w-2xl w-full my-auto text-center shadow-2xl backdrop-blur-sm space-y-5">
             <div className="flex justify-center">
               <Award className="text-secondary w-14 h-14" />
             </div>
@@ -2701,8 +3094,41 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                   ? 'Sesión Finalizada Anticipadamente'
                   : '¡Sesión Terapéutica Completada!'}
               </h2>
-              <p className="text-neutral/80 text-xs sm:text-sm">
-                Métricas computadas según modelos de evaluación oculomotora continua (MAD, RMSE, DTW).
+              <p className="text-slate-300 text-xs sm:text-sm">
+                Métricas computadas según modelos de evaluación oculomotora continua (
+                <ClinicalTermTooltip
+                  termId="MAD"
+                  audience="patient"
+                  theme="dark"
+                  showIcon={false}
+                  className="text-slate-200 hover:text-[#84F5E8] font-semibold"
+                >
+                  MAD
+                </ClinicalTermTooltip>
+                ,{' '}
+                <ClinicalTermTooltip
+                  termId="RMSE"
+                  audience="patient"
+                  theme="dark"
+                  showIcon={false}
+                  className="text-slate-200 hover:text-[#84F5E8] font-semibold"
+                >
+                  RMSE
+                </ClinicalTermTooltip>
+                ,{' '}
+                <ClinicalTermTooltip
+                  termId="DTW"
+                  audience="patient"
+                  theme="dark"
+                  showIcon={false}
+                  className="text-slate-200 hover:text-[#84F5E8] font-semibold"
+                >
+                  DTW
+                </ClinicalTermTooltip>
+                ).
+              </p>
+              <p className="text-[11px] text-[#8AE2D6]/90 mt-1">
+                Pasa el cursor o toca cualquier métrica (?) para saber qué es y para qué sirve.
               </p>
             </div>
 
@@ -2773,6 +3199,8 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                     className={`font-mono text-[10px] px-2 py-0.5 rounded ${
                       moduleSummary.inputOrigin === 'WEBCAM_GAZE'
                         ? 'bg-[#26A69A]/30 text-[#8AE2D6] border border-[#26A69A]/50'
+                        : moduleSummary.inputOrigin === 'NONE'
+                        ? 'bg-neutral-500/25 text-neutral-200 border border-neutral-400/40'
                         : 'bg-amber-500/25 text-amber-200 border border-amber-400/40'
                     }`}
                   >
@@ -2780,28 +3208,48 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                       ? 'ORIGEN: MIRADA WEBCAM (100%)'
                       : moduleSummary.inputOrigin === 'MIXED'
                       ? `ORIGEN: MIXTO (${moduleSummary.webcamSamplePercent}% WEBCAM)`
+                      : moduleSummary.inputOrigin === 'NONE'
+                      ? 'ORIGEN: SIN MUESTRAS OCULARES (0)'
                       : 'ORIGEN: CONTINGENCIA RATÓN'}
                   </span>
                   <span className="font-mono text-[10px] bg-black/30 px-2 py-0.5 rounded">
                     {moduleSummary.reportedDataOrigin}
                   </span>
+                  <ClinicalTermTooltip
+                    termId="INPUT_ORIGIN"
+                    audience="patient"
+                    theme="dark"
+                    ariaLabel="Qué significa el origen de los datos de esta sesión"
+                  />
                 </div>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
                 <div className="bg-black/25 rounded-lg p-2">
-                  <div className="text-[10px] text-white/70">Ensayos Exitosos</div>
+                  <div className="text-[10px] text-slate-200">
+                    <ClinicalTermTooltip termId="TRIAL_SUCCESS_OMISSIONS" audience="patient" theme="dark" iconSize={11}>
+                      Ensayos Exitosos
+                    </ClinicalTermTooltip>
+                  </div>
                   <div className="text-base font-bold text-[#8AE2D6]">
                     {moduleSummary.successfulTrials}
                   </div>
                 </div>
                 <div className="bg-black/25 rounded-lg p-2">
-                  <div className="text-[10px] text-white/70">Omisiones / Timeout</div>
+                  <div className="text-[10px] text-slate-200">
+                    <ClinicalTermTooltip termId="TRIAL_SUCCESS_OMISSIONS" audience="patient" theme="dark" iconSize={11}>
+                      Omisiones / Timeout
+                    </ClinicalTermTooltip>
+                  </div>
                   <div className="text-base font-bold text-amber-300">
                     {moduleSummary.timedOutTrials}
                   </div>
                 </div>
                 <div className="bg-black/25 rounded-lg p-2">
-                  <div className="text-[10px] text-white/70">Mediana Localiz./Búsq.</div>
+                  <div className="text-[10px] text-slate-200">
+                    <ClinicalTermTooltip termId="MEDIAN_DURATION" audience="patient" theme="dark" iconSize={11}>
+                      Mediana Localiz./Búsq.
+                    </ClinicalTermTooltip>
+                  </div>
                   <div className="text-base font-bold text-white">
                     {moduleSummary.medianDurationMs !== null
                       ? `${moduleSummary.medianDurationMs} ms`
@@ -2809,12 +3257,25 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                   </div>
                 </div>
                 <div className="bg-black/25 rounded-lg p-2">
-                  <div className="text-[10px] text-white/70">
-                    {resolvedMode === 'SYSTEMATIC_EXPLORATION'
-                      ? 'Cobertura Cuadrantes'
-                      : resolvedMode === 'SUSTAINED_TARGET_FIXATION'
-                      ? 'Fijación Continua Máx'
-                      : 'Falsas Fijaciones'}
+                  <div className="text-[10px] text-slate-200">
+                    <ClinicalTermTooltip
+                      termId={
+                        resolvedMode === 'SYSTEMATIC_EXPLORATION'
+                          ? 'QUADRANT_COVERAGE'
+                          : resolvedMode === 'SUSTAINED_TARGET_FIXATION'
+                          ? 'FOVEAL_FIXATION'
+                          : 'FALSE_FIXATIONS'
+                      }
+                      audience="patient"
+                      theme="dark"
+                      iconSize={11}
+                    >
+                      {resolvedMode === 'SYSTEMATIC_EXPLORATION'
+                        ? 'Cobertura Cuadrantes'
+                        : resolvedMode === 'SUSTAINED_TARGET_FIXATION'
+                        ? 'Fijación Continua Máx'
+                        : 'Falsas Fijaciones'}
+                    </ClinicalTermTooltip>
                   </div>
                   <div className="text-base font-bold text-white">
                     {resolvedMode === 'SYSTEMATIC_EXPLORATION'
@@ -2830,78 +3291,153 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-left">
               <div className="bg-white/5 border border-white/10 rounded-xl p-3">
                 <div className="flex items-center text-secondary text-xs font-semibold mb-1">
-                  <CheckCircle size={14} className="mr-1" /> Precisión Global
+                  <CheckCircle size={14} className="mr-1 shrink-0" />
+                  <ClinicalTermTooltip termId="GLOBAL_ACCURACY" audience="patient" theme="dark">
+                    Precisión Global
+                  </ClinicalTermTooltip>
                 </div>
                 <div className="text-2xl font-bold text-white">{report.accuracyScore}%</div>
-                <div className="text-[10px] text-neutral/70">
-                  BCEA 68%: {report.bceaDeg2} deg²
+                <div className="text-[10px] text-slate-300 mt-0.5">
+                  <ClinicalTermTooltip termId="BCEA" audience="patient" theme="dark" iconSize={11}>
+                    BCEA 68% est. (webcam escritorio)
+                  </ClinicalTermTooltip>
+                  : {report.bceaDeg2} deg²
                 </div>
               </div>
 
               <div className="bg-white/5 border border-white/10 rounded-xl p-3">
                 <div className="flex items-center text-tertiary text-xs font-semibold mb-1">
-                  <Activity size={14} className="mr-1" /> Error MAD / RMSE
+                  <Activity size={14} className="mr-1 shrink-0" />
+                  <ClinicalTermTooltip termId="MAD_RMSE" audience="patient" theme="dark">
+                    Error MAD / RMSE
+                  </ClinicalTermTooltip>
                 </div>
                 <div className="text-xl font-bold text-white">
                   {report.madPixels} / {report.rmsePixels} px
                 </div>
-                <div className="text-[10px] text-neutral/70">
+                <div className="text-[10px] text-slate-300 mt-0.5">
                   {(report.madNormalized * 100).toFixed(1)}% desv. media
                 </div>
               </div>
 
               <div className="bg-white/5 border border-white/10 rounded-xl p-3">
                 <div className="flex items-center text-blue-400 text-xs font-semibold mb-1">
-                  <Activity size={14} className="mr-1" /> Ganancia Sacádica
+                  <Activity size={14} className="mr-1 shrink-0" />
+                  <ClinicalTermTooltip termId="SACCADIC_GAIN" audience="patient" theme="dark">
+                    Ganancia Sacádica
+                  </ClinicalTermTooltip>
                 </div>
                 <div className="text-xl font-bold text-white">{report.saccadicGain}</div>
-                <div className="text-[10px] text-neutral/70">
-                  Latencia: {report.meanSaccadicLatencyMs} ms
+                <div className="text-[10px] text-slate-300 mt-0.5">
+                  <ClinicalTermTooltip termId="SACCADIC_LATENCY" audience="patient" theme="dark" iconSize={11}>
+                    Latencia
+                  </ClinicalTermTooltip>
+                  : {report.meanSaccadicLatencyMs} ms
                 </div>
               </div>
 
               <div className="bg-white/5 border border-white/10 rounded-xl p-3">
                 <div className="flex items-center text-purple-400 text-xs font-semibold mb-1">
-                  <Activity size={14} className="mr-1" /> DTW Score
+                  <Activity size={14} className="mr-1 shrink-0" />
+                  <ClinicalTermTooltip termId="DTW" audience="patient" theme="dark">
+                    DTW Score
+                  </ClinicalTermTooltip>
                 </div>
                 <div className="text-xl font-bold text-white">
                   {(report.dtwDistance * 100).toFixed(1)}
                 </div>
-                <div className="text-[10px] text-neutral/70">Fidelidad morfológica</div>
+                <div className="text-[10px] text-slate-300 mt-0.5">Fidelidad morfológica</div>
               </div>
 
               <div className="bg-white/5 border border-white/10 rounded-xl p-3">
                 <div className="flex items-center text-green-400 text-xs font-semibold mb-1">
-                  <CheckCircle size={14} className="mr-1" /> Fijación Foveal
+                  <CheckCircle size={14} className="mr-1 shrink-0" />
+                  <ClinicalTermTooltip termId="FOVEAL_FIXATION" audience="patient" theme="dark">
+                    Fijación Foveal
+                  </ClinicalTermTooltip>
                 </div>
                 <div className="text-xl font-bold text-white">{report.fixationStability}%</div>
-                <div className="text-[10px] text-neutral/70">
+                <div className="text-[10px] text-slate-300 mt-0.5">
                   Izq {report.leftHemifieldRatio}% · Der {report.rightHemifieldRatio}%
                 </div>
               </div>
 
               <div className="bg-white/5 border border-white/10 rounded-xl p-3">
                 <div className="flex items-center text-yellow-400 text-xs font-semibold mb-1">
-                  <Clock size={14} className="mr-1" /> Duración
+                  <Clock size={14} className="mr-1 shrink-0" />
+                  <ClinicalTermTooltip termId="SESSION_DURATION_SAMPLES" audience="patient" theme="dark">
+                    Duración
+                  </ClinicalTermTooltip>
                 </div>
                 <div className="text-xl font-bold text-white">
                   {(report.durationMs / 1000).toFixed(1)} s
                 </div>
-                <div className="text-[10px] text-neutral/70">{report.totalSamples} muestras</div>
+                <div className="text-[10px] text-slate-300 mt-0.5">{report.totalSamples} muestras</div>
               </div>
             </div>
+
+            {pendingExitIntent && pendingWorkSnapshot.hasPendingCriticalWork && (
+              <div className="bg-amber-950/60 border border-amber-400/50 rounded-xl p-3 text-left text-xs space-y-2">
+                <div className="font-bold text-amber-300">
+                  Confirmar salida con datos pendientes o cierre incierto en memoria
+                </div>
+                <p className="text-[11px] text-amber-100/85 leading-relaxed">
+                  Pendientes: lotes=
+                  {pendingWorkSnapshot.pendingTelemetryBatches +
+                    pendingWorkSnapshot.inFlightTelemetryBatches}
+                  , búfer={pendingWorkSnapshot.bufferedTelemetrySamples}, ensayos=
+                  {pendingWorkSnapshot.pendingTrials +
+                    pendingWorkSnapshot.uncertainTrials +
+                    pendingWorkSnapshot.inFlightTrials}
+                  {pendingWorkSnapshot.hasUncertainClosure
+                    ? ', cierre clínico pendiente de comprobante'
+                    : ''}
+                  . Los pendientes en memoria no sobreviven recargas ni se reasignan a otra sesión o paciente.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPendingExitIntent(null)}
+                    className="px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-white font-semibold cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const intent = pendingExitIntent;
+                      setPendingExitIntent(null);
+                      if (intent === 'NEW_SESSION') {
+                        if (onRequestNewSession) {
+                          onRequestNewSession();
+                        } else {
+                          navigate('/patient/dashboard');
+                        }
+                      } else {
+                        navigate('/patient/dashboard');
+                      }
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-[#071524] font-bold cursor-pointer"
+                  >
+                    Descartar pendientes y continuar
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="flex space-x-4">
               {isCognitoSession || sessionHadCognitoRef.current ? (
                 <button
                   onClick={() => {
-                    if (onRequestNewSession) {
+                    if (pendingWorkSnapshot.hasPendingCriticalWork) {
+                      setPendingExitIntent('NEW_SESSION');
+                    } else if (onRequestNewSession) {
                       onRequestNewSession();
                     } else {
                       navigate('/patient/dashboard');
                     }
                   }}
-                  className="flex-1 py-3 bg-white/10 hover:bg-white/20 rounded-xl font-bold flex items-center justify-center space-x-2 transition-all border border-white/20"
+                  className="flex-1 py-3 bg-white/10 hover:bg-white/20 rounded-xl font-bold flex items-center justify-center space-x-2 transition-all border border-white/20 cursor-pointer"
                 >
                   <RotateCcw size={18} />
                   <span>Nueva Sesión</span>
@@ -2909,7 +3445,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               ) : (
                 <button
                   onClick={() => onPhaseChange('TUTORIAL_CALIBRATION')}
-                  className="flex-1 py-3 bg-white/10 hover:bg-white/20 rounded-xl font-bold flex items-center justify-center space-x-2 transition-all border border-white/20"
+                  className="flex-1 py-3 bg-white/10 hover:bg-white/20 rounded-xl font-bold flex items-center justify-center space-x-2 transition-all border border-white/20 cursor-pointer"
                 >
                   <RotateCcw size={18} />
                   <span>Repetir</span>
@@ -2917,8 +3453,14 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               )}
 
               <button
-                onClick={() => navigate('/patient/dashboard')}
-                className="flex-1 py-3 bg-secondary hover:bg-secondary/80 rounded-xl font-bold flex items-center justify-center space-x-2 transition-all shadow-lg"
+                onClick={() => {
+                  if (pendingWorkSnapshot.hasPendingCriticalWork) {
+                    setPendingExitIntent('DASHBOARD');
+                  } else {
+                    navigate('/patient/dashboard');
+                  }
+                }}
+                className="flex-1 py-3 bg-secondary hover:bg-secondary/80 rounded-xl font-bold flex items-center justify-center space-x-2 transition-all shadow-lg cursor-pointer"
               >
                 <ArrowLeft size={18} />
                 <span>Ir al Dashboard</span>

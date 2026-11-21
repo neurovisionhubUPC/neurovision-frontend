@@ -92,6 +92,7 @@ export const useAppStore = create<AppState>()(
             options?.refreshToken !== undefined ? options.refreshToken : state.refreshToken,
           authMode: options?.authMode ?? (options?.accessToken ? 'COGNITO' : 'MOCK'),
           userProfile: options?.profile ?? null,
+          activeClinicalSession: null,
         })),
       logout: () =>
         set({

@@ -681,7 +681,8 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
       }`}
     >
       {/* Top Navbar */}
-      <header className="bg-white border-b border-[#E2EEF5] px-4 sm:px-6 lg:px-12 py-3.5 flex items-center justify-between sticky top-0 z-30 shadow-xs">
+      <header className="bg-white border-b border-[#E2EEF5] px-4 sm:px-6 lg:px-8 py-3.5 sticky top-0 z-30 shadow-xs">
+        <div className="max-w-7xl mx-auto w-full flex items-center justify-between gap-3">
         {/* Brand / Logo */}
         <div className="flex items-center space-x-3">
           <div className="w-10 h-10 rounded-full bg-[#E6F6FF] flex items-center justify-center text-[#26A69A]">
@@ -776,10 +777,11 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
             <LogOut size={18} />
           </button>
         </div>
+        </div>
       </header>
 
       {/* Main Container */}
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-7">
+      <main className="flex-1 max-w-6xl 2xl:max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-7">
         {/* Patient Greeting & Status Header Card */}
         <div className="bg-white border border-[#DCEBF4] rounded-2xl p-6 sm:p-7 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="space-y-3">
@@ -2204,12 +2206,14 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
       )}
 
       {/* Footer */}
-      <footer className="border-t border-[#E2EEF5] bg-white py-4 px-6 lg:px-12 mt-12 text-xs text-[#455A64] flex flex-col sm:flex-row items-center justify-between gap-2">
-        <div className="flex items-center space-x-2">
-          <span className="text-[#26A69A] font-bold">♿</span>
-          <span>Interfaz adaptada</span>
+      <footer className="border-t border-[#E2EEF5] bg-white py-4 px-4 sm:px-6 lg:px-8 mt-12 text-xs text-[#455A64]">
+        <div className="max-w-7xl mx-auto w-full flex flex-col sm:flex-row items-center justify-between gap-2">
+          <div className="flex items-center space-x-2">
+            <span className="text-[#26A69A] font-bold">♿</span>
+            <span>Interfaz adaptada</span>
+          </div>
+          <div>Plataforma Médica Homologada © 2024 NeuroVisión Rehab</div>
         </div>
-        <div>Plataforma Médica Homologada © 2024 NeuroVisión Rehab</div>
       </footer>
     </div>
   );

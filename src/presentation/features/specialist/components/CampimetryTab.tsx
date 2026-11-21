@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import type { Patient } from '../../../../core/domain/Patient';
 import { useAppStore } from '../../../../core/store/useAppStore';
+import { ClinicalTermTooltip } from '../../../shared/components/ClinicalTermTooltip';
 import {
   ApiError,
   analyticsApi,
@@ -46,7 +47,7 @@ export interface CampimetryTabProps {
   onOpenAudit?: () => void;
 }
 
-export type CampimetryViewMode = 'goldmann_60' | 'fixation_30' | 'heatmap_120';
+export type CampimetryViewMode = 'goldmann_60' | 'fixation_30' | 'heatmap_telemetry';
 
 interface StreamItem {
   streamId: string;
@@ -77,7 +78,7 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
   // Selector de Modo Visual
   const [viewMode, setViewMode] = useState<CampimetryViewMode>('goldmann_60');
 
-  // Estado de streams y telemetría 120Hz
+  // Estado de streams y telemetría ocular
   const [streams, setStreams] = useState<StreamItem[]>([]);
   const [selectedStreamId, setSelectedStreamId] = useState<string | null>(latestStreamId || null);
   const [streamSummary, setStreamSummary] = useState<AnalyticsSummaryResponse | null>(null);
@@ -96,7 +97,7 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
   const effectiveSessionId = latestSessionId || patient?.sessionHistory?.[0]?.id || null;
   const effectivePatientId = patientId || patient?.id || null;
 
-  // Carga paralela de streams y métricas de analítica 120Hz
+  // Carga paralela de streams y métricas de analítica ocular
   const loadAnalyticsData = useCallback(async () => {
     if (!isCognitoMode || !effectiveSessionId) {
       setStreams([]);
@@ -223,7 +224,7 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
           setTelemetryError(analyticsFailureMessage);
         } else {
           setTelemetryNotice(
-            'La sesión seleccionada no cuenta con streams de telemetría 120Hz asociados en Analytics (8085).'
+            'La sesión seleccionada no cuenta con streams de telemetría ocular asociados en Analytics (8085).'
           );
         }
       }
@@ -332,7 +333,7 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
       return {
         leftPercent: leftPct,
         rightPercent: 100 - leftPct,
-        source: 'TELEMETRY_120HZ' as const,
+        source: 'TELEMETRY_OBSERVED' as const,
         originBadge: '[Origen: Analytics 8085]' as const,
         totalSamples: total,
       };
@@ -363,7 +364,9 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
   const physiologicalMetrics = useMemo(() => {
     const hasTelemetry = Boolean(streamSummary || trialSummary || streamGazePlot);
 
-    // 1. Dispersión Estimada (BCEA heurística sobre puntos GazePlot [0..1])
+    // 1. Índice exploratorio de dispersión espacial (estimación heurística al 68% sobre
+    //    coordenadas normalizadas [0..1] de GazePlot). No corresponde a una gradación
+    //    perimétrica calibrada de alta frecuencia ni a un BCEA oftalmológico estandarizado.
     let bcea: number | null = isCognitoMode
       ? null
       : patient?.campimetryData?.fixationStabilityBCEA ?? 0.82;
@@ -513,15 +516,15 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
 
           <button
             type="button"
-            onClick={() => setViewMode('heatmap_120')}
+            onClick={() => setViewMode('heatmap_telemetry')}
             className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
-              viewMode === 'heatmap_120'
+              viewMode === 'heatmap_telemetry'
                 ? 'bg-[#006A62] text-white shadow-xs'
                 : 'bg-[#F3FAFF] text-[#071524] hover:bg-[#DBF1FE] border border-[#071524]/10'
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
-            <span>Heatmap Ocular 120Hz</span>
+            <span>Heatmap de Mirada</span>
           </button>
         </div>
 
@@ -570,7 +573,7 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
               className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-[#006A62]/30 hover:bg-[#E6F6FF] text-[#006A62] transition-colors shadow-xs disabled:opacity-60 cursor-pointer"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isLoadingTelemetry ? 'animate-spin' : ''}`} />
-              <span>Sincronizar 120Hz</span>
+              <span>Sincronizar Telemetría</span>
             </button>
           )}
 
@@ -581,7 +584,7 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
               className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded-lg bg-[#071524] hover:bg-[#1C2A39] text-white transition-colors shadow-xs cursor-pointer"
             >
               <Activity className="w-3.5 h-3.5 text-[#81F3E5]" />
-              <span>Auditoría 120Hz</span>
+              <span>Auditoría de Telemetría</span>
             </button>
           )}
         </div>
@@ -611,15 +614,17 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
             <h3 className="font-bold text-base text-[#071524] flex items-center gap-2">
               <Eye className="w-5 h-5 text-[#006A62]" />
               {viewMode === 'goldmann_60' && 'Campimetría Computarizada 60° (Goldmann / Humphrey)'}
-              {viewMode === 'fixation_30' && 'Mapa de Fijación Foveal y Estabilidad Macular (30°)'}
-              {viewMode === 'heatmap_120' && 'Densidad Oculomotora Retinotópica 120Hz (Scanpath & Heatmap)'}
+              {viewMode === 'fixation_30' && 'Mapa de Fijación Foveal y Dispersión Espacial (30°)'}
+              {viewMode === 'heatmap_telemetry' && 'Densidad Oculomotora Retinotópica (Scanpath & Heatmap)'}
             </h3>
             <p className="text-xs text-[#44474C] mt-0.5">
               {viewMode === 'goldmann_60' &&
                 'Isópteros periféricos y zona de escotoma homónimo absoluto con preservación macular'}
               {viewMode === 'fixation_30' &&
-                'Elipse de contorno bivariado (BCEA 68%) y microrrastreo de fijación foveal central'}
-              {viewMode === 'heatmap_120' &&
+                (isCognitoMode
+                  ? 'Índice exploratorio de dispersión (estimación 68% sobre coordenadas normalizadas) y trazado GazePlot'
+                  : 'Elipse de contorno bivariado (BCEA 68%) y microrrastreo de fijación foveal central')}
+              {viewMode === 'heatmap_telemetry' &&
                 'Matriz de densidad de muestras de mirada y trayectorias sacádicas sobre la cuadrícula retinotópica'}
             </p>
           </div>
@@ -850,7 +855,7 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
 
               <span className="absolute top-3 left-4 text-[10px] font-mono text-[#81F3E5]">Campo 30° Macular</span>
               <span className="absolute bottom-3 right-4 text-[10px] font-mono text-[#81F3E5]">
-                {isCognitoMode ? 'GazePlot [0..1]' : 'BCEA 68% [Demo]'}
+                {isCognitoMode ? 'GazePlot [0..1] · Exploratorio' : 'BCEA 68% [Demo]'}
               </span>
             </div>
 
@@ -858,21 +863,24 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
             <div className="flex-1 max-w-md space-y-4 text-xs text-[#071524]">
               <div className="p-4 rounded-xl bg-[#E6F6FF] border border-[#071524]/10 space-y-2">
                 <div className="flex items-center justify-between font-bold text-sm">
-                  <span>
+                  <span className="flex items-center gap-1.5">
                     {isCognitoMode
-                      ? 'Dispersión Estimada (Heurística GazePlot)'
+                      ? 'Índice Exploratorio de Dispersión (68%)'
                       : 'Estabilidad de Fijación Foveal'}
+                    <ClinicalTermTooltip termId="BCEA" audience="specialist" />
                   </span>
                   <span className="text-[#006A62]">
                     {physiologicalMetrics.bcea !== null
-                      ? `BCEA: ${physiologicalMetrics.bcea} deg²`
+                      ? isCognitoMode
+                        ? `~${physiologicalMetrics.bcea} deg² (est.)`
+                        : `BCEA: ${physiologicalMetrics.bcea} deg²`
                       : 'N/D (Sin puntos de mirada)'}
                   </span>
                 </div>
                 <p className="text-[#44474C]">
                   {isCognitoMode
                     ? physiologicalMetrics.bcea !== null
-                      ? `Estimación heurística calculada sobre ${physiologicalMetrics.totalGazePoints} puntos normalizados [0..1] del endpoint GazePlot (Analytics 8085).`
+                      ? `Índice exploratorio de dispersión espacial al 68% calculado heurísticamente sobre ${physiologicalMetrics.totalGazePoints} puntos normalizados [0..1] de GazePlot (Analytics 8085); no equivale a gradación perimétrica calibrada de alta frecuencia.`
                       : 'No existen suficientes puntos de mirada (mínimo 10 muestras en GazePlot 8085) para estimar dispersión espacial en esta sesión.'
                     : `El 68% de las fijaciones se concentran dentro del anillo central de ${(
                         (physiologicalMetrics.bcea ?? 0.82) * 1.2
@@ -882,10 +890,11 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="p-3 bg-[#F3FAFF] rounded-lg border border-[#071524]/10">
-                  <span className="text-[#74777C] text-[11px] font-semibold block">
+                  <span className="text-[#74777C] text-[11px] font-semibold flex items-center gap-1">
                     {isCognitoMode
                       ? 'Muestras en Región Central (±15%)'
                       : 'Tiempo en Fóvea (< 2°)'}
+                    <ClinicalTermTooltip termId="FOVEAL_FIXATION" audience="specialist" iconSize={12} />
                   </span>
                   <p className="font-bold text-base text-[#071524] mt-0.5">
                     {isCognitoMode
@@ -901,8 +910,9 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
                   </span>
                 </div>
                 <div className="p-3 bg-[#F3FAFF] rounded-lg border border-[#071524]/10">
-                  <span className="text-[#74777C] text-[11px] font-semibold block">
+                  <span className="text-[#74777C] text-[11px] font-semibold flex items-center gap-1">
                     {isCognitoMode ? 'Velocidad Media de Mirada' : 'Tasa Microsacadas'}
+                    <ClinicalTermTooltip termId="GAZE_PATH_DISTANCE" audience="specialist" iconSize={12} />
                   </span>
                   <p className="font-bold text-base text-[#071524] mt-0.5">
                     {isCognitoMode
@@ -920,8 +930,8 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
           </div>
         )}
 
-        {/* 3. MODO: Heatmap Ocular 120Hz */}
-        {viewMode === 'heatmap_120' && (
+        {/* 3. MODO: Heatmap de Mirada */}
+        {viewMode === 'heatmap_telemetry' && (
           <div className="space-y-4">
             <div className="relative w-full max-w-2xl mx-auto h-80 bg-[#071524] rounded-2xl overflow-hidden p-4 border border-[#81F3E5]/20 flex flex-col justify-between">
               {/* Cuadrícula retinotópica real desde streamHeatmap o demo en modo Mock */}
@@ -987,7 +997,7 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
                 </div>
               )}
 
-              {/* Trazado SVG del Scanpath 120Hz */}
+              {/* Trazado SVG del Scanpath de Mirada */}
               <svg viewBox="0 0 400 240" className="absolute inset-0 w-full h-full pointer-events-none p-3">
                 {/* Cuadrantes clínicos */}
                 <line x1="200" y1="10" x2="200" y2="230" stroke="#81F3E5" strokeWidth="1" strokeDasharray="3 3" opacity="0.6" />
@@ -1044,9 +1054,10 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
             <span className="flex items-center gap-1.5">
               <TrendingUp className="w-4 h-4 text-[#006A62]" />
               Distribución Exploratoria Ocular (Hemicampos)
+              <ClinicalTermTooltip termId="FOVEAL_FIXATION" audience="specialist" />
             </span>
             <span className="text-[11px] text-[#006A62] font-semibold">
-              {hemifieldDistribution.source === 'TELEMETRY_120HZ'
+              {hemifieldDistribution.source === 'TELEMETRY_OBSERVED'
                 ? `${hemifieldDistribution.originBadge} (${hemifieldDistribution.totalSamples} muestras)`
                 : hemifieldDistribution.source === 'NO_TELEMETRY'
                 ? `${hemifieldDistribution.originBadge} (0 muestras)`
@@ -1099,30 +1110,33 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
 
       {/* Indicadores Visuales Transparentes con Etiqueta de Origen Real */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Card 1: BCEA / Dispersión GazePlot */}
+        {/* Card 1: Índice exploratorio de dispersión / BCEA */}
         <div className="bg-white p-5 rounded-xl border border-[#071524]/10 shadow-xs flex flex-col justify-between">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-[#44474C] font-semibold uppercase tracking-wider">
-              {isCognitoMode ? 'Dispersión Estimada (BCEA)' : 'Estabilidad BCEA'}
+            <span className="text-xs text-[#44474C] font-semibold uppercase tracking-wider flex items-center gap-1">
+              {isCognitoMode ? 'Dispersión Exploratoria (68%)' : 'Estabilidad BCEA'}
+              <ClinicalTermTooltip termId="BCEA" audience="specialist" iconSize={13} />
             </span>
             <Activity className="w-4 h-4 text-[#006A62] shrink-0" />
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-2xl font-bold text-[#071524]">
               {physiologicalMetrics.bcea !== null
-                ? `${physiologicalMetrics.bcea} deg²`
+                ? isCognitoMode
+                  ? `~${physiologicalMetrics.bcea} deg²`
+                  : `${physiologicalMetrics.bcea} deg²`
                 : 'N/D (Sin puntos de mirada)'}
             </span>
           </div>
           <div className="mt-2 flex flex-col gap-1 text-xs">
             <span className="text-[#44474C] text-[11px]">
               {physiologicalMetrics.bcea !== null
-                ? `Sobre ${physiologicalMetrics.totalGazePoints} pts normalizados`
+                ? `Índice exploratorio sobre ${physiologicalMetrics.totalGazePoints} pts normalizados [0..1]`
                 : 'Requiere ≥ 10 puntos en GazePlot'}
             </span>
             <span className="text-[10px] px-2 py-0.5 rounded bg-[#DBF1FE] text-[#071524] font-bold self-start">
               {isCognitoMode
-                ? '[Estimación heurística sobre GazePlot]'
+                ? '[Índice exploratorio · Sin gradación perimétrica calibrada]'
                 : '[Datos Demo / Mock]'}
             </span>
           </div>
@@ -1131,10 +1145,15 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
         {/* Card 2: Cobertura Espacial Real (occupiedCellRatio) y Confianza Media */}
         <div className="bg-white p-5 rounded-xl border border-[#071524]/10 shadow-xs flex flex-col justify-between">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-[#44474C] font-semibold uppercase tracking-wider">
+            <span className="text-xs text-[#44474C] font-semibold uppercase tracking-wider flex items-center gap-1">
               {isCognitoMode
                 ? 'Cobertura Espacial (occupiedCellRatio)'
                 : 'Ganancia Sacádica'}
+              <ClinicalTermTooltip
+                termId={isCognitoMode ? 'QUADRANT_COVERAGE' : 'SACCADIC_GAIN'}
+                audience="specialist"
+                iconSize={13}
+              />
             </span>
             <Award className="w-4 h-4 text-[#006A62] shrink-0" />
           </div>
@@ -1148,14 +1167,20 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
             </span>
           </div>
           <div className="mt-2 flex flex-col gap-1 text-xs">
-            <span className="text-[#006A62] font-semibold text-[11px]">
-              {isCognitoMode
-                ? `Confianza Media: ${
-                    physiologicalMetrics.confidenceMean !== null
+            <span className="text-[#006A62] font-semibold text-[11px] flex items-center gap-1">
+              {isCognitoMode ? (
+                <>
+                  <span>
+                    Confianza Media:{' '}
+                    {physiologicalMetrics.confidenceMean !== null
                       ? `${(physiologicalMetrics.confidenceMean * 100).toFixed(1)}%`
-                      : 'N/D'
-                  }`
-                : 'Precisión de Salto Demo'}
+                      : 'N/D'}
+                  </span>
+                  <ClinicalTermTooltip termId="CONFIDENCE_MEAN" audience="specialist" iconSize={12} />
+                </>
+              ) : (
+                'Precisión de Salto Demo'
+              )}
             </span>
             <span className="text-[10px] px-2 py-0.5 rounded bg-[#DBF1FE] text-[#071524] font-bold self-start">
               {isCognitoMode ? '[Origen: Analytics 8085]' : '[Datos Demo / Mock]'}
@@ -1166,8 +1191,9 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
         {/* Card 3: Velocidad Media de Mirada (Analytics 8085) */}
         <div className="bg-white p-5 rounded-xl border border-[#071524]/10 shadow-xs flex flex-col justify-between">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-[#44474C] font-semibold uppercase tracking-wider">
+            <span className="text-xs text-[#44474C] font-semibold uppercase tracking-wider flex items-center gap-1">
               Velocidad Media de Mirada
+              <ClinicalTermTooltip termId="GAZE_PATH_DISTANCE" audience="specialist" iconSize={13} />
             </span>
             <TrendingUp className="w-4 h-4 text-[#006A62] shrink-0" />
           </div>
@@ -1197,8 +1223,9 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
         {/* Card 4: Mediana de Localización / Búsqueda (Ensayos PRODUCER_REPORTED) */}
         <div className="bg-white p-5 rounded-xl border border-[#071524]/10 shadow-xs flex flex-col justify-between">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-[#44474C] font-semibold uppercase tracking-wider">
+            <span className="text-xs text-[#44474C] font-semibold uppercase tracking-wider flex items-center gap-1">
               {isCognitoMode ? physiologicalMetrics.trialMetricLabel : 'Latencia de Búsqueda'}
+              <ClinicalTermTooltip termId="MEDIAN_DURATION" audience="specialist" iconSize={13} />
             </span>
             <ShieldAlert className="w-4 h-4 text-[#006A62] shrink-0" />
           </div>
@@ -1258,7 +1285,7 @@ export const CampimetryTab: React.FC<CampimetryTabProps> = ({
                 onClick={onOpenAudit}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#F3FAFF] text-[#071524] hover:bg-[#E6F6FF] transition-colors border border-[#071524]/10 cursor-pointer"
               >
-                <span>Auditoría 120Hz</span>
+                <span>Auditoría de Telemetría</span>
                 <ChevronRight className="w-3.5 h-3.5" />
               </button>
             )}

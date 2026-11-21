@@ -518,9 +518,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const totalCount = servicesHealth.length;
 
   return (
-    <div className="min-h-screen lg:h-screen flex bg-bgMain font-sans">
-      {/* Columna Izquierda - Imagen */}
-      <div className="hidden lg:flex lg:w-[44%] p-4 pl-4 pr-0 h-full shrink-0">
+    <div className="min-h-screen lg:h-screen bg-bgMain font-sans">
+      <div className="min-h-screen lg:h-full max-w-[1920px] mx-auto w-full flex">
+        {/* Columna Izquierda - Imagen */}
+        <div className="hidden lg:flex lg:w-[44%] 2xl:max-w-[880px] p-4 pl-4 pr-0 h-full shrink-0">
         <div className="w-full h-full relative rounded-xl overflow-hidden border-2 border-white/20">
           <img
             src={loginImage}
@@ -850,13 +851,13 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
             /* VISTA PRINCIPAL: FORMULARIO DIRECTO AWS COGNITO (EMAIL + CLAVE) */
             /* ============================================================== */
             <div className="bg-white rounded-2xl border border-[#071524]/10 p-5 sm:p-6 shadow-xs space-y-4">
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-bold uppercase tracking-wider text-[#006A62] flex items-center gap-1.5">
-                  <Lock className="w-3.5 h-3.5" />
+                  <Lock className="w-3.5 h-3.5 shrink-0" />
                   Acceso Directo AWS Cognito
                 </span>
                 <span
-                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap shrink-0 ${
                     cognitoConfig.isPasswordAuthConfigured
                       ? 'bg-emerald-100 text-emerald-800'
                       : 'bg-amber-100 text-amber-800'
@@ -1030,12 +1031,12 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                 {/* Tab Content: Hosted UI PKCE */}
                 {activeSecondaryTab === 'hosted-ui' && (
                   <div className="space-y-3 pt-1 text-xs">
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="text-[11px] font-bold text-[#44474C]">
                         Redirección OAuth2 Hosted UI con Code Challenge PKCE
                       </span>
                       <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap shrink-0 ${
                           cognitoConfig.isHostedUiConfigured
                             ? 'bg-emerald-100 text-emerald-800'
                             : 'bg-amber-100 text-amber-800'
@@ -1340,6 +1341,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
             )}
           </div>
         </div>
+      </div>
       </div>
     </div>
   );

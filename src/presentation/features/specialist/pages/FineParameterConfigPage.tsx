@@ -9,7 +9,6 @@ import {
   Compass,
   Crosshair,
   Sliders,
-  Info,
   ArrowLeftRight,
   ShieldCheck,
   EyeOff,
@@ -23,6 +22,7 @@ import {
   Save,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   Loader2,
   PlusCircle,
 } from 'lucide-react';
@@ -43,8 +43,10 @@ import {
   type VisualScanningParameters,
   type VisualSearchParameters,
 } from '../../../../infrastructure/api';
+import { validateExerciseCaptureCompatibility } from '../../../../infrastructure/therapy/captureCompatibility';
 import { SpecialistHeader } from '../components/SpecialistHeader';
 import { SpecialistFooter } from '../components/SpecialistFooter';
+import { ClinicalTermTooltip } from '../../../shared/components/ClinicalTermTooltip';
 
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
@@ -452,6 +454,30 @@ export const FineParameterConfigPage: React.FC = () => {
       ? 'visual-search'
       : 'fixation';
 
+  const activeFrozenParams = useMemo(() => {
+    if (activeExerciseCode === 'visual-scanning') {
+      return sanitizeScanning(scanningParams);
+    }
+    if (activeExerciseCode === 'visual-search') {
+      return sanitizeSearch(searchParams);
+    }
+    return sanitizeFixation(fixationParams);
+  }, [activeExerciseCode, scanningParams, searchParams, fixationParams]);
+
+  const activeCompatibility = useMemo(
+    () => validateExerciseCaptureCompatibility(activeFrozenParams),
+    [activeFrozenParams]
+  );
+
+  const activeErrors = useMemo(
+    () => activeCompatibility.issues.filter((i) => i.severity === 'ERROR'),
+    [activeCompatibility]
+  );
+  const activeWarnings = useMemo(
+    () => activeCompatibility.issues.filter((i) => i.severity === 'WARNING'),
+    [activeCompatibility]
+  );
+
   const buildActiveConfigurationBody = (): AppendTherapeuticConfigurationBody => {
     const effectiveFrom = new Date(Date.now() + 2000).toISOString();
     if (activeExerciseCode === 'visual-scanning') {
@@ -589,6 +615,15 @@ export const FineParameterConfigPage: React.FC = () => {
     setRemoteError(null);
     setSaveBanner(null);
 
+    if (!activeCompatibility.compatible) {
+      const blockMsg =
+        activeErrors.map((i) => i.message).join(' ') ||
+        'Los parámetros actuales son incompatibles con la captura clínica.';
+      setRemoteError(blockMsg);
+      showToast(blockMsg);
+      return;
+    }
+
     if (isCognitoMode) {
       if (!activePlan) {
         setRemoteError(
@@ -656,7 +691,7 @@ export const FineParameterConfigPage: React.FC = () => {
 
       {/* PATIENT CONTEXT HEADER BANNER */}
       <section className="bg-white border-b border-[#071524]/10 py-4 px-4 md:px-8 shadow-xs">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="max-w-[1536px] mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-start md:items-center gap-4">
             <button
               onClick={() => navigate(`/specialist/patients/${currentPatient.id}`)}
@@ -728,8 +763,8 @@ export const FineParameterConfigPage: React.FC = () => {
       </section>
 
       {/* NAVIGATION TABS FOR EXERCISES */}
-      <nav className="bg-[#E6F6FF] border-b border-[#071524]/10 px-4 md:px-8 sticky top-16 z-30">
-        <div className="max-w-7xl mx-auto flex items-center space-x-2 overflow-x-auto">
+      <nav className="bg-[#E6F6FF] border-b border-[#071524]/10 px-4 md:px-8 relative z-10">
+        <div className="max-w-[1536px] mx-auto flex items-center space-x-2 overflow-x-auto">
           <button
             type="button"
             onClick={() => setActiveModuleTab('saccadic')}
@@ -772,7 +807,7 @@ export const FineParameterConfigPage: React.FC = () => {
       </nav>
 
       {/* MAIN TWO-COLUMN CONTENT AREA */}
-      <main className="flex-grow max-w-7xl mx-auto w-full px-4 md:px-8 py-6">
+      <main className="flex-grow max-w-[1536px] mx-auto w-full px-4 md:px-8 py-6">
         {/* Status Banners */}
         {isCognitoMode && isLoadingRemote && (
           <div className="mb-5 p-4 rounded-xl bg-white border border-[#071524]/10 flex items-center gap-2.5 text-xs font-semibold text-[#006A62]">
@@ -883,9 +918,7 @@ export const FineParameterConfigPage: React.FC = () => {
                     <div>
                       <label className="text-sm font-bold text-[#071524] flex items-center gap-2">
                         <span>1. Excentricidad Angular (`eccentricityDegrees`)</span>
-                        <span title="Límite estricto del contrato Schema 2: 5° a 30°">
-                          <Info className="w-4 h-4 text-[#74777C]" />
-                        </span>
+                        <ClinicalTermTooltip termId="PARAM_ECCENTRICITY" audience="specialist" />
                       </label>
                       <p className="text-xs text-[#44474C]">Rango válido: 5° a 30° enteros</p>
                     </div>
@@ -919,8 +952,9 @@ export const FineParameterConfigPage: React.FC = () => {
                 <div className="bg-white rounded-xl border border-[#071524]/10 p-5 space-y-3 shadow-xs">
                   <div className="flex items-center justify-between">
                     <div>
-                      <label className="text-sm font-bold text-[#071524]">
-                        2. Fijación Mínima (`minimumFixationMs`)
+                      <label className="text-sm font-bold text-[#071524] inline-flex items-center gap-1.5">
+                        <span>2. Fijación Mínima (`minimumFixationMs`)</span>
+                        <ClinicalTermTooltip termId="PARAM_MIN_FIXATION" audience="specialist" />
                       </label>
                       <p className="text-xs text-[#44474C]">Rango válido: 300–2000 ms</p>
                     </div>
@@ -992,7 +1026,10 @@ export const FineParameterConfigPage: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="font-bold text-[#071524] block mb-1">Intervalo ISI (ms)</label>
+                    <label className="font-bold text-[#071524] inline-flex items-center gap-1 mb-1">
+                      <span>Intervalo ISI (ms)</span>
+                      <ClinicalTermTooltip termId="PARAM_ISI_REST" audience="specialist" iconSize={12} />
+                    </label>
                     <input
                       type="number"
                       min={500}
@@ -1093,8 +1130,9 @@ export const FineParameterConfigPage: React.FC = () => {
                         <ArrowLeftRight className="w-4 h-4" />
                       </span>
                       <div>
-                        <h3 className="text-sm font-bold text-[#071524]">
-                          2. Sesgo hacia Hemicampo Deficitario (`affectedHemifieldBias`)
+                        <h3 className="text-sm font-bold text-[#071524] flex items-center gap-1.5">
+                          <span>2. Sesgo hacia Hemicampo Deficitario (`affectedHemifieldBias`)</span>
+                          <ClinicalTermTooltip termId="PARAM_HEMIFIELD_BIAS" audience="specialist" />
                         </h3>
                         <p className="text-xs text-[#44474C]">Rango estricto: 0.50 a 1.00</p>
                       </div>
@@ -1127,8 +1165,9 @@ export const FineParameterConfigPage: React.FC = () => {
                 {/* Dwell Time + Search Time */}
                 <div className="bg-white rounded-xl border border-[#071524]/10 p-5 grid grid-cols-1 sm:grid-cols-2 gap-4 shadow-xs text-xs">
                   <div>
-                    <label className="font-bold text-[#071524] block mb-1">
-                      Fijación Mínima (`minimumFixationMs`)
+                    <label className="font-bold text-[#071524] inline-flex items-center gap-1 mb-1">
+                      <span>Fijación Mínima (`minimumFixationMs`)</span>
+                      <ClinicalTermTooltip termId="PARAM_MIN_FIXATION" audience="specialist" iconSize={12} />
                     </label>
                     <input
                       type="number"
@@ -1215,8 +1254,9 @@ export const FineParameterConfigPage: React.FC = () => {
                 <div className="bg-white rounded-xl border border-[#071524]/10 p-5 space-y-4 shadow-xs">
                   <div className="flex items-center justify-between">
                     <div>
-                      <label className="text-sm font-bold text-[#071524]">
-                        1. Ventana de Fijación (`minimumFixationMs` / `maximumFixationMs`)
+                      <label className="text-sm font-bold text-[#071524] inline-flex items-center gap-1.5">
+                        <span>1. Ventana de Fijación (`minimumFixationMs` / `maximumFixationMs`)</span>
+                        <ClinicalTermTooltip termId="PARAM_MIN_FIXATION" audience="specialist" />
                       </label>
                       <p className="text-xs text-[#44474C]">
                         Mínima 300–3000 ms · Máxima 500–5000 ms (automáticamente &gt;= mínima)
@@ -1277,8 +1317,9 @@ export const FineParameterConfigPage: React.FC = () => {
                 {/* Rest between repetitions */}
                 <div className="bg-white rounded-xl border border-[#071524]/10 p-5 space-y-2 shadow-xs text-xs">
                   <div className="flex items-center justify-between">
-                    <label className="font-bold text-[#071524]">
-                      2. Descanso entre Repeticiones (`restBetweenRepetitionsMs`)
+                    <label className="font-bold text-[#071524] inline-flex items-center gap-1.5">
+                      <span>2. Descanso entre Repeticiones (`restBetweenRepetitionsMs`)</span>
+                      <ClinicalTermTooltip termId="PARAM_ISI_REST" audience="specialist" iconSize={12} />
                     </label>
                     <span className="font-bold text-[#006A62]">{fixationParams.restBetweenRepetitionsMs} ms</span>
                   </div>
@@ -1314,7 +1355,10 @@ export const FineParameterConfigPage: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="bg-[#F3FAFF] p-3 rounded-lg border border-[#071524]/10">
                   <div className="flex justify-between mb-1">
-                    <label className="font-bold text-[#071524]">Tamaño de Diana (`targetSizePx`)</label>
+                    <label className="font-bold text-[#071524] inline-flex items-center gap-1">
+                      <span>Tamaño de Diana (`targetSizePx`)</span>
+                      <ClinicalTermTooltip termId="PARAM_TARGET_SIZE" audience="specialist" iconSize={12} />
+                    </label>
                     <span className="font-mono font-bold text-[#006A62]">{simTargetSizePx} px</span>
                   </div>
                   <input
@@ -1443,7 +1487,49 @@ export const FineParameterConfigPage: React.FC = () => {
               })()}
             </div>
 
-            {/* Safety Certification Notice */}
+            {/* Capture Compatibility Card / Safety Notice */}
+            {!activeCompatibility.compatible && (
+              <div
+                role="alert"
+                className="p-4 rounded-xl bg-[#FFDAD6] border border-[#BA1A1A]/30 text-[#93000A] space-y-1.5 text-xs"
+              >
+                <div className="flex items-center gap-2 font-bold">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-[#BA1A1A]" />
+                  <span>Incompatibilidad de Captura Clínica (guardado bloqueado)</span>
+                </div>
+                {activeErrors.map((issue) => (
+                  <p key={issue.code}>
+                    <span className="font-mono font-semibold">[{issue.code}]</span> {issue.message}
+                  </p>
+                ))}
+                <p className="text-[11px] font-mono pt-1 text-[#93000A]/85">
+                  Dwell requerido: {activeCompatibility.requiredPureDwellMs} ms · Ventana disponible:{' '}
+                  {activeCompatibility.allowedDurationMs} ms · Margen: {activeCompatibility.headroomMs} ms
+                </p>
+              </div>
+            )}
+
+            {activeWarnings.length > 0 && (
+              <div
+                role="status"
+                className="p-4 rounded-xl bg-[#FFF4E5] border border-[#FFE0B2] text-[#8C4A00] space-y-1.5 text-xs"
+              >
+                <div className="flex items-center gap-2 font-bold">
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-[#D97706]" />
+                  <span>Advertencia de Margen Clínico</span>
+                </div>
+                {activeWarnings.map((issue) => (
+                  <p key={issue.code}>
+                    <span className="font-mono font-semibold">[{issue.code}]</span> {issue.message}
+                  </p>
+                ))}
+                <p className="text-[11px] font-mono pt-1 text-[#8C4A00]/90">
+                  Dwell requerido: {activeCompatibility.requiredPureDwellMs} ms · Ventana disponible:{' '}
+                  {activeCompatibility.allowedDurationMs} ms · Margen: {activeCompatibility.headroomMs} ms
+                </p>
+              </div>
+            )}
+
             <div className="flex items-center gap-3 bg-[#D5ECF8] text-[#071524] p-4 rounded-xl border border-[#006A62]/30">
               <ShieldCheck className="w-6 h-6 text-[#006A62] shrink-0" />
               <p className="text-xs leading-relaxed font-medium">
@@ -1462,7 +1548,20 @@ export const FineParameterConfigPage: React.FC = () => {
                   <h3 className="text-sm font-bold text-[#071524]">Simulación del Campo Visual</h3>
                 </div>
                 <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-[#1C2A39] text-white">
-                  60 FPS • Schema v2
+                  Simulador Retinotópico • Schema v2
+                </span>
+              </div>
+
+              {/* Dedicated Telemetry Sub-Header above Canvas (prevents overlap with canvas labels) */}
+              <div className="px-4 py-2 bg-[#0E1E2E] border-b border-white/10 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-[#84F5E8]">
+                <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                  <Gauge className="w-3.5 h-3.5 shrink-0" />
+                  <span>
+                    {simEccentricity}° • {simTargetSizePx}px • Dwell {simDwellMs}ms
+                  </span>
+                </span>
+                <span className="text-[10px] uppercase tracking-wider text-white/75 whitespace-nowrap">
+                  Hemifield: {isLeftHemifield ? 'LEFT' : 'RIGHT'}
                 </span>
               </div>
 
@@ -1477,19 +1576,19 @@ export const FineParameterConfigPage: React.FC = () => {
               >
                 {/* Left Hemifield */}
                 <div
-                  className={`absolute left-0 top-0 bottom-0 w-1/2 flex flex-col justify-between p-3 pointer-events-none ${
+                  className={`absolute left-0 top-0 bottom-0 w-1/2 pointer-events-none ${
                     isLeftHemifield
                       ? 'bg-[#BA1A1A]/15 border-r-2 border-dashed border-[#BA1A1A]/50'
                       : ''
                   }`}
                 >
                   <div
-                    className={`flex items-center gap-1.5 ${
+                    className={`absolute top-2.5 left-2.5 max-w-[44%] flex items-center gap-1.5 ${
                       isLeftHemifield ? 'text-[#FFDAD6]' : 'text-[#84F5E8]'
                     }`}
                   >
-                    {isLeftHemifield ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    <span className="text-[11px] font-bold uppercase tracking-wider">
+                    {isLeftHemifield ? <EyeOff className="w-3.5 h-3.5 shrink-0" /> : <Eye className="w-3.5 h-3.5 shrink-0" />}
+                    <span className="text-[10px] xl:text-[11px] font-bold uppercase tracking-wider leading-tight">
                       {isLeftHemifield ? 'Hemicampo Ciego (Izq)' : 'Hemicampo Sano (Izq)'}
                     </span>
                   </div>
@@ -1497,21 +1596,21 @@ export const FineParameterConfigPage: React.FC = () => {
 
                 {/* Right Hemifield */}
                 <div
-                  className={`absolute right-0 top-0 bottom-0 w-1/2 flex flex-col justify-between p-3 pointer-events-none text-right ${
+                  className={`absolute right-0 top-0 bottom-0 w-1/2 pointer-events-none text-right ${
                     !isLeftHemifield
                       ? 'bg-[#BA1A1A]/15 border-l-2 border-dashed border-[#BA1A1A]/50'
                       : ''
                   }`}
                 >
                   <div
-                    className={`flex items-center justify-end gap-1.5 ${
+                    className={`absolute top-2.5 right-2.5 max-w-[44%] flex items-center justify-end gap-1.5 ${
                       !isLeftHemifield ? 'text-[#FFDAD6]' : 'text-[#84F5E8]'
                     }`}
                   >
-                    <span className="text-[11px] font-bold uppercase tracking-wider">
+                    <span className="text-[10px] xl:text-[11px] font-bold uppercase tracking-wider leading-tight">
                       {!isLeftHemifield ? 'Hemicampo Ciego (Der)' : 'Hemicampo Sano (Der)'}
                     </span>
-                    {!isLeftHemifield ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    {!isLeftHemifield ? <EyeOff className="w-3.5 h-3.5 shrink-0" /> : <Eye className="w-3.5 h-3.5 shrink-0" />}
                   </div>
                 </div>
 
@@ -1520,16 +1619,16 @@ export const FineParameterConfigPage: React.FC = () => {
                   <div className="w-7 h-7 rounded-full border-2 border-[#84F5E8] flex items-center justify-center bg-[#1C2A39]/80 z-10 shadow-xs">
                     <span className="w-1.5 h-1.5 rounded-full bg-[#84F5E8]" />
                   </div>
-                  <span className="absolute top-2 text-[10px] font-mono text-[#84F5E8] bg-[#1C2A39] px-1 rounded border border-[#84F5E8]/40">
+                  <span className="absolute bottom-2 text-[10px] font-mono text-[#84F5E8] bg-[#1C2A39] px-1.5 rounded border border-[#84F5E8]/40 whitespace-nowrap">
                     0° Fóvea
                   </span>
                 </div>
 
                 {/* Degree Horizon Axis Markers (clamped to -30°..+30°) */}
-                <div className="absolute bottom-2 left-6 text-[10px] font-mono text-[#B9C8DB]">-30°</div>
-                <div className="absolute bottom-2 left-1/4 text-[10px] font-mono text-[#B9C8DB]">-15°</div>
-                <div className="absolute bottom-2 right-1/4 text-[10px] font-mono text-[#B9C8DB]">+15°</div>
-                <div className="absolute bottom-2 right-6 text-[10px] font-mono text-[#B9C8DB]">+30°</div>
+                <div className="absolute bottom-2 left-3 text-[10px] font-mono text-[#B9C8DB]">-30°</div>
+                <div className="absolute bottom-2 left-[23%] text-[10px] font-mono text-[#B9C8DB]">-15°</div>
+                <div className="absolute bottom-2 right-[23%] text-[10px] font-mono text-[#B9C8DB]">+15°</div>
+                <div className="absolute bottom-2 right-3 text-[10px] font-mono text-[#B9C8DB]">+30°</div>
 
                 {/* Target Stimulus Node */}
                 <div
@@ -1546,14 +1645,6 @@ export const FineParameterConfigPage: React.FC = () => {
                     className="rounded-full border-2 border-[#84F5E8] border-dashed animate-spin"
                   />
                   <div className="absolute w-4 h-4 rounded-full bg-[#84F5E8] shadow-[0_0_12px_#84f5e8] ring-2 ring-[#071524]" />
-                </div>
-
-                {/* Velocity / Direction Vector Indicator */}
-                <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-[#071524]/85 backdrop-blur-xs px-3 py-1 rounded text-[11px] font-mono text-[#84F5E8] border border-[#84F5E8]/30 flex items-center gap-1.5 whitespace-nowrap">
-                  <Gauge className="w-3.5 h-3.5" />
-                  <span>
-                    {simEccentricity}° • {simTargetSizePx}px • Dwell {simDwellMs}ms
-                  </span>
                 </div>
               </div>
 
@@ -1636,9 +1727,9 @@ export const FineParameterConfigPage: React.FC = () => {
 
       {/* CLINICAL ACTIONS AND TRACEABILITY BOTTOM BAR */}
       <footer className="bg-[#E6F6FF] border-t border-[#071524]/10 py-5 px-4 md:px-8">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
+        <div className="max-w-[1536px] mx-auto flex flex-col lg:flex-row justify-between items-center gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-[#071524]/10 flex items-center justify-center text-[#071524]">
+            <div className="w-9 h-9 rounded-lg bg-[#071524]/10 flex items-center justify-center text-[#071524] shrink-0">
               <Fingerprint className="w-5 h-5" />
             </div>
             <div>
@@ -1651,16 +1742,27 @@ export const FineParameterConfigPage: React.FC = () => {
                   ? `Plan ${activePlan.therapyPlanId.slice(0, 8)} • v${activePlan.configurationVersion}`
                   : 'Modo Local / Previsualización'}
               </p>
+              {!activeCompatibility.compatible ? (
+                <p className="text-[11px] font-semibold text-[#93000A] mt-0.5 flex items-center gap-1">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 text-[#BA1A1A]" />
+                  <span>Incompatible ({activeErrors.map((e) => e.code).join(', ')}) — Guardado bloqueado</span>
+                </p>
+              ) : activeWarnings.length > 0 ? (
+                <p className="text-[11px] font-semibold text-[#8C4A00] mt-0.5 flex items-center gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-[#D97706]" />
+                  <span>Margen estrecho ({activeCompatibility.headroomMs} ms)</span>
+                </p>
+              ) : null}
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
+          <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto justify-end">
             <button
               type="button"
               onClick={handleResetProtocolDefaults}
-              className="h-12 px-4 rounded-lg border-2 border-[#071524] text-[#071524] text-xs sm:text-sm font-bold hover:bg-[#DBF1FE] transition-all flex items-center gap-2 cursor-pointer"
+              className="h-10 xl:h-11 px-3.5 xl:px-5 rounded-lg border-2 border-[#071524] text-[#071524] text-xs xl:text-sm font-bold hover:bg-[#DBF1FE] transition-all flex items-center gap-2 cursor-pointer whitespace-nowrap"
             >
-              <RotateCcw className="w-4 h-4" />
+              <RotateCcw className="w-4 h-4 shrink-0" />
               <span>Restablecer Valores</span>
             </button>
 
@@ -1670,19 +1772,19 @@ export const FineParameterConfigPage: React.FC = () => {
                 syncStorePreview(activePlan?.therapyPlanId);
                 showToast(`Previsualización sincronizada para ${currentPatient.name}.`);
               }}
-              className="h-12 px-4 rounded-lg border-2 border-[#006A62] text-[#006A62] text-xs sm:text-sm font-bold hover:bg-[#006A62]/10 transition-all flex items-center gap-2 cursor-pointer"
+              className="h-10 xl:h-11 px-3.5 xl:px-5 rounded-lg border-2 border-[#006A62] text-[#006A62] text-xs xl:text-sm font-bold hover:bg-[#006A62]/10 transition-all flex items-center gap-2 cursor-pointer whitespace-nowrap"
             >
-              <Smartphone className="w-4 h-4" />
+              <Smartphone className="w-4 h-4 shrink-0" />
               <span>Sincronizar Simulador</span>
             </button>
 
             <button
               type="button"
-              disabled={isSavingRemote}
+              disabled={isSavingRemote || !activeCompatibility.compatible}
               onClick={() => void handleApplyAndSave()}
-              className="h-12 px-6 rounded-lg bg-[#006A62] text-white text-xs sm:text-sm font-bold hover:bg-[#005049] transition-all shadow-md flex items-center gap-2 cursor-pointer disabled:opacity-60"
+              className="h-10 xl:h-11 px-4 xl:px-6 rounded-lg bg-[#006A62] text-white text-xs xl:text-sm font-bold hover:bg-[#005049] transition-all shadow-md flex items-center gap-2 cursor-pointer disabled:opacity-60 whitespace-nowrap"
             >
-              {isSavingRemote ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              {isSavingRemote ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <Save className="w-4 h-4 shrink-0" />}
               <span>
                 {isCognitoMode
                   ? 'Guardar Configuración en Plan (Schema v2)'

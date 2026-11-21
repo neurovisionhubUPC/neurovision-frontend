@@ -21,6 +21,11 @@ import {
   predictGazePoint,
 } from '../../../../infrastructure/cv/math/zhangYinModel';
 import { MAX_GAZE_STALENESS_MS } from '../../../../infrastructure/therapy/gazeFreshnessGuard';
+import {
+  InferenceRateMonitor,
+  validateExerciseCaptureCompatibility,
+  type InferenceRateSnapshot,
+} from '../../../../infrastructure/therapy/captureCompatibility';
 import { EyeTrackingGameCanvas } from '../components/EyeTrackingGameCanvas';
 import { CalibrationOverlay } from '../components/CalibrationOverlay';
 import { PreCalibrationView } from '../components/PreCalibrationView';
@@ -33,6 +38,7 @@ import {
   clinicalApi,
   createUuid,
   extractApiErrorMessage,
+  parseJwtClaims,
   type PatientEffectiveConfiguration,
   type PatientSessionProgressResponse,
   type PatientTherapyPlanResponse,
@@ -42,6 +48,7 @@ import {
   type TherapyExerciseCode,
   type VersionedConfiguration,
 } from '../../../../infrastructure/api';
+import type { PendingCriticalWorkSnapshot } from '../../../../infrastructure/telemetry/sessionDeliveryController';
 
 interface ModeOptionMeta {
   mode: ReportMode;
@@ -207,6 +214,16 @@ export const SeriousGamesPage: React.FC = () => {
   const setGamePhase = useAppStore((state) => state.setGamePhase);
 
   const isCognitoMode = authMode === 'COGNITO' && Boolean(accessToken);
+  const accountKey = useMemo(() => {
+    if (!isCognitoMode || !accessToken) return null;
+    return parseJwtClaims(accessToken).sub ?? userProfile?.id ?? null;
+  }, [isCognitoMode, accessToken, userProfile?.id]);
+
+  const inferenceRateMonitorRef = useRef(new InferenceRateMonitor());
+  const lastRateUiSyncRef = useRef<number>(0);
+  const [inferenceRateSnap, setInferenceRateSnap] = useState<InferenceRateSnapshot>(() =>
+    inferenceRateMonitorRef.current.getSnapshot(0)
+  );
 
   const { calibrationData, addSample, isPreCalibrating, startCalibration } = useCalibrationStore();
   const [heatmapPos, setHeatmapPos] = useState({ x: 0.5, y: 0.5 });
@@ -219,12 +236,45 @@ export const SeriousGamesPage: React.FC = () => {
   const [clinicalError, setClinicalError] = useState<string | null>(null);
   const [startingSessionKey, setStartingSessionKey] = useState<string | null>(null);
   const [sessionProgress, setSessionProgress] = useState<PatientSessionProgressResponse | null>(null);
+  const [pendingCriticalWork, setPendingCriticalWork] = useState<PendingCriticalWorkSnapshot | null>(
+    null
+  );
+  const [confirmExitWithPending, setConfirmExitWithPending] = useState(false);
   const [mouseFallbackEnabled, setMouseFallbackEnabled] = useState(false);
   const mouseFallbackEnabledRef = useRef(mouseFallbackEnabled);
   useEffect(() => {
     mouseFallbackEnabledRef.current = mouseFallbackEnabled;
   }, [mouseFallbackEnabled]);
   const [expiredSession, setExpiredSession] = useState<PatientTherapySessionResponse | null>(null);
+
+  const prevAccountKeyRef = useRef<string | null>(accountKey);
+  const prevActiveSessionIdRef = useRef<string | null>(
+    activeClinicalSession?.therapySessionId ?? null
+  );
+
+  useEffect(() => {
+    const nextSessionId = activeClinicalSession?.therapySessionId ?? null;
+    const accountChanged = prevAccountKeyRef.current !== accountKey;
+    const sessionChanged = prevActiveSessionIdRef.current !== nextSessionId;
+
+    if (accountChanged) {
+      prevAccountKeyRef.current = accountKey;
+      setSessionProgress(null);
+      setExpiredSession(null);
+      setPlans([]);
+      setClinicalError(null);
+      setPendingCriticalWork(null);
+      setConfirmExitWithPending(false);
+    }
+
+    if (sessionChanged) {
+      prevActiveSessionIdRef.current = nextSessionId;
+      setSessionProgress((prev) =>
+        prev && nextSessionId && prev.therapySessionId === nextSessionId ? prev : null
+      );
+      setConfirmExitWithPending(false);
+    }
+  }, [accountKey, activeClinicalSession]);
 
   const prescribedMode: ReportMode | null = useMemo(() => {
     if (activeClinicalSession) {
@@ -269,7 +319,9 @@ export const SeriousGamesPage: React.FC = () => {
           );
           try {
             const prog = await clinicalApi.getSessionProgress(cur.session.therapySessionId);
-            setSessionProgress(prog);
+            setSessionProgress(
+              prog.therapySessionId === cur.session.therapySessionId ? prog : null
+            );
           } catch {
             setSessionProgress(null);
           }
@@ -300,12 +352,14 @@ export const SeriousGamesPage: React.FC = () => {
   useEffect(() => {
     if (!isCognitoMode || !activeClinicalSession) return;
     let cancelled = false;
+    const expectedId = activeClinicalSession.therapySessionId;
+    setSessionProgress((prev) =>
+      prev && prev.therapySessionId === expectedId ? prev : null
+    );
     const fetchProgress = async () => {
       try {
-        const prog = await clinicalApi.getSessionProgress(
-          activeClinicalSession.therapySessionId
-        );
-        if (!cancelled) {
+        const prog = await clinicalApi.getSessionProgress(expectedId);
+        if (!cancelled && prog.therapySessionId === expectedId) {
           setSessionProgress(prog);
         }
       } catch {
@@ -325,6 +379,7 @@ export const SeriousGamesPage: React.FC = () => {
     const key = `${plan.therapyPlanId}:${cfg.exerciseCode}`;
     setStartingSessionKey(key);
     setClinicalError(null);
+    setSessionProgress(null);
     try {
       const session = await clinicalApi.startTherapySession(
         plan.therapyPlanId,
@@ -334,8 +389,14 @@ export const SeriousGamesPage: React.FC = () => {
       setExpiredSession(null);
       setActiveClinicalSession(session);
       setPrescription(buildPrescriptionFromSession(session, userProfile?.id || 'patient'));
-      const prog = await clinicalApi.getSessionProgress(session.therapySessionId);
-      setSessionProgress(prog);
+      try {
+        const prog = await clinicalApi.getSessionProgress(session.therapySessionId);
+        setSessionProgress(
+          prog.therapySessionId === session.therapySessionId ? prog : null
+        );
+      } catch {
+        setSessionProgress(null);
+      }
     } catch (err) {
       setClinicalError(`No se pudo iniciar la sesión: ${extractApiErrorMessage(err)}`);
     } finally {
@@ -347,6 +408,7 @@ export const SeriousGamesPage: React.FC = () => {
     if (!expiredSession) return;
     setLoadingClinical(true);
     setClinicalError(null);
+    setSessionProgress(null);
     try {
       // Per `clinical/integration.md` (lines 120, 140) & `StartTherapySessionCommandService.java`:
       // An EXPIRED session cannot be closed via PUT /completion (which requires a live lease).
@@ -359,8 +421,14 @@ export const SeriousGamesPage: React.FC = () => {
       setExpiredSession(null);
       setActiveClinicalSession(freshSession);
       setPrescription(buildPrescriptionFromSession(freshSession, userProfile?.id || 'patient'));
-      const prog = await clinicalApi.getSessionProgress(freshSession.therapySessionId);
-      setSessionProgress(prog);
+      try {
+        const prog = await clinicalApi.getSessionProgress(freshSession.therapySessionId);
+        setSessionProgress(
+          prog.therapySessionId === freshSession.therapySessionId ? prog : null
+        );
+      } catch {
+        setSessionProgress(null);
+      }
       await loadClinicalSessionAndPlans();
     } catch (err) {
       setClinicalError(`No se pudo reemplazar la sesión expirada: ${extractApiErrorMessage(err)}`);
@@ -439,9 +507,21 @@ export const SeriousGamesPage: React.FC = () => {
   // 1. Recepción de Coordenadas desde el Worker Cefálico
   const handleWorkerResults = useCallback(
     (results: any) => {
+      const nowPerf = performance.now();
       if (results && results.rawMetrics) {
         rawMetricsRef.current = results.rawMetrics;
+        inferenceRateMonitorRef.current.recordSample(nowPerf);
       }
+
+      if (nowPerf - lastRateUiSyncRef.current >= 500) {
+        lastRateUiSyncRef.current = nowPerf;
+        setInferenceRateSnap(inferenceRateMonitorRef.current.getSnapshot(nowPerf));
+      }
+      const latestRateSnap = inferenceRateMonitorRef.current.getSnapshot(nowPerf);
+      const fpsLabel =
+        latestRateSnap.measuredFps !== null
+          ? `${latestRateSnap.measuredFps.toFixed(1)} Hz`
+          : 'Midiendo...';
 
       if (pipCanvasRef.current && results && results.rawMetrics) {
         const ctx = pipCanvasRef.current.getContext('2d');
@@ -490,7 +570,7 @@ export const SeriousGamesPage: React.FC = () => {
           }
 
           if (debugRef.current) {
-            debugRef.current.innerText = `STATUS: CALIBRANDO... ${
+            debugRef.current.innerText = `STATUS: CALIBRANDO... (${fpsLabel}) ${
               isBlinking ? '👁️ [PARPADEO DETECTADO - Muestra omitida]' : ''
             }
 Rostro: Detectado (Landmarks: ${results.landmarkCount || 0})
@@ -502,7 +582,7 @@ Yaw: ${(results.rawMetrics.headPose.yaw * (180 / Math.PI)).toFixed(1)}° | Pitch
           }
         } else if (results && results.rawResultsAvailable) {
           if (debugRef.current) {
-            debugRef.current.innerText = `STATUS: ROSTRO DETECTADO (Esperando pupilas)...`;
+            debugRef.current.innerText = `STATUS: ROSTRO DETECTADO (${fpsLabel} · Esperando pupilas)...`;
           }
         }
         return;
@@ -535,7 +615,7 @@ Yaw: ${(results.rawMetrics.headPose.yaw * (180 / Math.PI)).toFixed(1)}° | Pitch
             ? (calibrationData.leftModel.r2Y * 100).toFixed(0)
             : 'N/A';
 
-          debugRef.current.innerText = `STATUS: TRACKING ACTIVO (9 Pts OLS + Z-Recalib)
+          debugRef.current.innerText = `STATUS: TRACKING ACTIVO (${fpsLabel} · 9 Pts OLS)
 Fidelidad Calibración: R² X: ${r2X}% | R² Y: ${r2Y}%
 EAR: ${results.rawMetrics.ear ? results.rawMetrics.ear.avg.toFixed(3) : 'N/A'}
 Yaw: ${(results.rawMetrics.headPose.yaw * (180 / Math.PI)).toFixed(1)}° | Pitch: ${(
@@ -549,7 +629,7 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
         gazeConfidenceRef.current = 0.0;
         if (debugRef.current && !mouseFallbackEnabledRef.current) {
           debugRef.current.innerText =
-            'STATUS: ROSTRO/MIRADA NO DETECTADA\nReubíquese frente a la cámara para reanudar el seguimiento ocular.';
+            `STATUS: ROSTRO/MIRADA NO DETECTADA (${fpsLabel})\nReubíquese frente a la cámara para reanudar el seguimiento ocular.`;
         }
       }
     },
@@ -564,11 +644,24 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
     if (videoRef.current && isStreaming && isReady()) {
       processVideoFrame(videoRef.current, now);
     }
+    if (now - lastRateUiSyncRef.current >= 500) {
+      lastRateUiSyncRef.current = now;
+      setInferenceRateSnap(inferenceRateMonitorRef.current.getSnapshot(now));
+    }
     if (!mouseFallbackEnabledRef.current && (!isStreaming || now - lastValidGazePerfRef.current > MAX_GAZE_STALENESS_MS)) {
       gazeConfidenceRef.current = 0.0;
     }
     frameRequestRef.current = requestAnimationFrame(captureLoop);
   }, [isStreaming, isReady, processVideoFrame, videoRef]);
+
+  const captureCompatibility = useMemo(() => {
+    const frozen = effectivePrescription.clinicalContext?.frozenParameters;
+    if (!frozen) return null;
+    return validateExerciseCaptureCompatibility(frozen, {
+      isMouseFallback: mouseFallbackEnabled,
+      measuredFps: inferenceRateSnap.measuredFps,
+    });
+  }, [effectivePrescription, mouseFallbackEnabled, inferenceRateSnap.measuredFps]);
 
   useEffect(() => {
     if (calibrationData) {
@@ -586,6 +679,9 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
     if (!isStreaming) {
       gazeConfidenceRef.current = 0.0;
       gazeIsBlinkingRef.current = false;
+      inferenceRateMonitorRef.current.reset();
+      lastRateUiSyncRef.current = 0;
+      setInferenceRateSnap(inferenceRateMonitorRef.current.getSnapshot(0));
     }
   }, [isStreaming]);
 
@@ -662,9 +758,11 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
 
   return (
     <div
-      className={`min-h-screen ${
-        isPreCalibrating ? 'bg-[#F3FAFF] text-[#1C2A39] p-6 lg:p-10' : 'bg-[#000000] text-white p-6 lg:p-8'
-      } flex flex-col items-center justify-center relative transition-colors duration-300 font-sans`}
+      className={
+        isPreCalibrating
+          ? 'min-h-screen bg-[#F3FAFF] text-[#1C2A39] p-6 lg:p-10 flex flex-col items-center justify-center relative transition-colors duration-300 font-sans'
+          : 'h-[100dvh] overflow-hidden bg-[#000000] text-white px-3 py-2.5 sm:px-5 sm:py-3 lg:px-6 flex flex-col items-center justify-between gap-2 relative transition-colors duration-300 font-sans'
+      }
     >
       {/* VISTA 1: PRE-CALIBRACIÓN + PANEL DE SESIÓN CLÍNICA Y MODOS */}
       {isPreCalibrating ? (
@@ -827,7 +925,7 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
             ) : null}
 
             {/* All 5 Modes Selector / Viewer */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5">
               {ALL_GAME_MODES.map((m) => {
                 const isSelected = selectedMode === m.mode;
                 const lockedByClinical = Boolean(isCognitoMode && activeClinicalSession);
@@ -847,11 +945,11 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
                   >
                     <p className="text-xs font-bold leading-tight">{m.label}</p>
                     <p
-                      className={`text-[10px] font-mono mt-0.5 truncate ${
-                        isSelected ? 'text-[#8AE2D6]' : 'text-[#455A64]'
+                      className={`text-[11px] mt-1 line-clamp-2 leading-snug ${
+                        isSelected ? 'text-[#DCF8F2]' : 'text-[#455A64]'
                       }`}
                     >
-                      {m.mode}
+                      {m.shortDesc}
                     </p>
                   </button>
                 );
@@ -870,7 +968,9 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
               startWebcam(deviceId);
             }}
             rawMetricsRef={rawMetricsRef}
-            fps={60}
+            fps={inferenceRateSnap.measuredFps}
+            inferenceRateStatus={inferenceRateSnap.status}
+            captureCompatibility={captureCompatibility}
             onEnableMouseFallback={handleStartMouseFallbackDirect}
           />
 
@@ -897,24 +997,30 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
         /* VISTA 2: CALIBRACIÓN DE 9 PUNTOS / JUEGO ACTIVO */
         <>
           {/* HUD Superior */}
-          <div className="w-full max-w-6xl mb-4 flex flex-wrap justify-between items-center gap-3 text-white/90 z-40">
-            <div className="flex flex-wrap items-center gap-3">
+          <div className="w-full max-w-[1520px] shrink-0 flex flex-wrap justify-between items-center gap-2 text-white/90 z-40">
+            <div className="flex flex-wrap items-center gap-2.5">
               <button
-                onClick={() => navigate('/patient/dashboard')}
+                onClick={() => {
+                  if (isCognitoMode && pendingCriticalWork?.hasPendingCriticalWork) {
+                    setConfirmExitWithPending(true);
+                  } else {
+                    navigate('/patient/dashboard');
+                  }
+                }}
                 className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold text-white border border-white/15 transition-all"
               >
                 <ArrowLeft size={14} />
                 <span>Panel</span>
               </button>
-              <h2 className="text-lg sm:text-xl font-bold tracking-tight text-[#26A69A]">
+              <h2 className="text-base sm:text-lg font-bold tracking-tight text-[#26A69A]">
                 NeuroVisión Terapia
               </h2>
-              <span className="text-xs bg-white/10 border border-white/15 px-3 py-1 rounded-full font-semibold text-[#8AE2D6]">
+              <span className="text-xs bg-white/10 border border-white/15 px-2.5 py-1 rounded-full font-semibold text-[#8AE2D6]">
                 {activeModeMeta.label}
               </span>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex flex-wrap items-center gap-2">
               {renderProgressPill()}
 
               {!isCognitoMode && gamePhase !== 'CALIBRATION' && (
@@ -957,38 +1063,56 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
             </div>
           </div>
 
-          {/* PIP Video flotante abajo a la derecha */}
-          <div className="fixed bottom-4 right-4 z-50 w-48 h-36 rounded-xl overflow-hidden shadow-2xl border-2 border-white/20 bg-black">
-            <video
-              ref={attachVideoElement}
-              className="w-full h-full object-cover -scale-x-100 opacity-90"
-              playsInline
-              muted
-              autoPlay
-            />
-            <canvas
-              ref={pipCanvasRef}
-              width={192}
-              height={144}
-              className="absolute inset-0 w-full h-full -scale-x-100 pointer-events-none"
-            />
-          </div>
-
-          {/* HUD Telemetría flotante abajo a la izquierda */}
-          <div className="fixed bottom-4 left-4 bg-black/80 backdrop-blur-xs border border-white/10 text-[#8AE2D6] p-3.5 rounded-xl font-mono text-xs shadow-xl z-50 pointer-events-none max-w-sm">
-            <pre ref={debugRef} className="m-0 leading-tight whitespace-pre-wrap">
-              {mouseFallbackEnabled
-                ? 'Modo cursor ratón activo para seguimiento de prueba.'
-                : 'Iniciando telemetría...'}
-            </pre>
-          </div>
+          {confirmExitWithPending &&
+            isCognitoMode &&
+            pendingCriticalWork?.hasPendingCriticalWork && (
+              <div className="w-full max-w-[1520px] shrink-0 bg-amber-950/90 border border-amber-400/50 rounded-xl px-3.5 py-2.5 text-xs text-amber-100 flex flex-wrap items-center justify-between gap-2 z-50">
+                <div className="space-y-0.5">
+                  <div className="font-bold text-amber-300">
+                    Hay trabajo clínico pendiente en memoria sin confirmar
+                  </div>
+                  <p className="text-[11px] text-amber-100/85">
+                    Pendientes/inciertos: lotes=
+                    {pendingCriticalWork.pendingTelemetryBatches +
+                      pendingCriticalWork.inFlightTelemetryBatches}
+                    , búfer={pendingCriticalWork.bufferedTelemetrySamples}, ensayos=
+                    {pendingCriticalWork.pendingTrials +
+                      pendingCriticalWork.uncertainTrials +
+                      pendingCriticalWork.inFlightTrials}
+                    {pendingCriticalWork.hasUncertainClosure
+                      ? ', cierre clínico incierto en curso'
+                      : ''}
+                    . Las colas son solo en memoria (no sobreviven recarga ni se reasignan a otra sesión o paciente).
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmExitWithPending(false)}
+                    className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-semibold cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConfirmExitWithPending(false);
+                      navigate('/patient/dashboard');
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-[#071524] font-bold cursor-pointer"
+                  >
+                    Descartar pendientes y salir
+                  </button>
+                </div>
+              </div>
+            )}
 
           {/* Overlay de los 9 Puntos de Calibración */}
           {gamePhase === 'CALIBRATION' && (
             <>
               <CalibrationOverlay />
               <div
-                className="absolute w-28 h-28 rounded-full pointer-events-none z-100 transition-transform duration-75"
+                className="fixed w-28 h-28 rounded-full pointer-events-none z-100 transition-transform duration-75"
                 style={{
                   left: `${heatmapPos.x * 100}%`,
                   top: `${heatmapPos.y * 100}%`,
@@ -1001,29 +1125,61 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
             </>
           )}
 
-          {/* Motor Gráfico del Juego (Serious Games) */}
-          <div className="w-full max-w-5xl aspect-video relative z-20">
-            <EyeTrackingGameCanvas
-              gazeRef={gazeRef}
-              prescription={effectivePrescription}
-              gamePhase={gamePhase}
-              onPhaseChange={setGamePhase}
-              exerciseMode={selectedMode}
-              activeSession={activeClinicalSession}
-              sessionProgress={sessionProgress}
-              gazeConfidenceRef={gazeConfidenceRef}
-              gazeSampleSeqRef={gazeSampleSeqRef}
-              gazeLastValidPerfRef={lastValidGazePerfRef}
-              gazeIsBlinkingRef={gazeIsBlinkingRef}
-              isWebcamStreaming={isStreaming}
-              mouseFallbackEnabled={mouseFallbackEnabled}
-              onToggleMouseFallback={() => setMouseFallbackEnabled((prev) => !prev)}
-              onSessionProgressUpdate={setSessionProgress}
-              onSessionCompleted={handleSessionCompleted}
-              onRequestNewSession={handleRequestNewSession}
-              width={1024}
-              height={576}
-            />
+          {/* Motor Gráfico del Juego (Serious Games) - Viewport-fitted without dock overlap */}
+          <div className="flex-1 min-h-0 w-full flex items-center justify-center overflow-hidden">
+            <div className="w-full max-w-[min(100%,calc((100dvh-260px)*16/9),1520px)] relative">
+              <EyeTrackingGameCanvas
+                gazeRef={gazeRef}
+                prescription={effectivePrescription}
+                gamePhase={gamePhase}
+                onPhaseChange={setGamePhase}
+                exerciseMode={selectedMode}
+                activeSession={activeClinicalSession}
+                sessionProgress={sessionProgress}
+                accountKey={accountKey}
+                gazeConfidenceRef={gazeConfidenceRef}
+                gazeSampleSeqRef={gazeSampleSeqRef}
+                gazeLastValidPerfRef={lastValidGazePerfRef}
+                gazeIsBlinkingRef={gazeIsBlinkingRef}
+                isWebcamStreaming={isStreaming}
+                mouseFallbackEnabled={mouseFallbackEnabled}
+                measuredInferenceFps={inferenceRateSnap.measuredFps}
+                onToggleMouseFallback={() => setMouseFallbackEnabled((prev) => !prev)}
+                onSessionProgressUpdate={setSessionProgress}
+                onSessionCompleted={handleSessionCompleted}
+                onRequestNewSession={handleRequestNewSession}
+                onPendingCriticalWorkChange={setPendingCriticalWork}
+                width={1024}
+                height={576}
+              />
+            </div>
+          </div>
+
+          {/* Dock Inferior Dedicado: Telemetría izquierda + PIP Cámara derecha (sin solapar el canvas) */}
+          <div className="w-full max-w-[1520px] shrink-0 flex items-end justify-between gap-3 z-30">
+            <div className="bg-[#0B131C]/90 border border-white/10 text-[#8AE2D6] px-3 py-2 rounded-xl font-mono text-[11px] shadow-xl max-w-md max-h-[84px] overflow-hidden pointer-events-none">
+              <pre ref={debugRef} className="m-0 leading-tight whitespace-pre-wrap">
+                {mouseFallbackEnabled
+                  ? 'Modo cursor ratón activo para seguimiento de prueba.'
+                  : 'Iniciando telemetría...'}
+              </pre>
+            </div>
+
+            <div className="relative shrink-0 w-28 h-[84px] sm:w-32 sm:h-24 rounded-xl overflow-hidden shadow-2xl border border-white/20 bg-black">
+              <video
+                ref={attachVideoElement}
+                className="w-full h-full object-cover -scale-x-100 opacity-90"
+                playsInline
+                muted
+                autoPlay
+              />
+              <canvas
+                ref={pipCanvasRef}
+                width={192}
+                height={144}
+                className="absolute inset-0 w-full h-full -scale-x-100 pointer-events-none"
+              />
+            </div>
           </div>
         </>
       )}

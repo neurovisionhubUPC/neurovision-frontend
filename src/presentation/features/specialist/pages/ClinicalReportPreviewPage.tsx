@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '../../../../core/store/useAppStore';
 import type { Patient } from '../../../../core/domain/Patient';
+import { ClinicalTermTooltip } from '../../../shared/components/ClinicalTermTooltip';
 import {
   ApiError,
   clinicalApi,
@@ -571,7 +572,7 @@ export const ClinicalReportPreviewPage: React.FC = () => {
 
         {/* TOP NAVIGATION & REPORT CONTROLS */}
         <header className="print:hidden sticky top-0 z-40 bg-white border-b border-[#071524]/10 shadow-xs">
-          <div className="max-w-[1440px] mx-auto px-4 md:px-6 py-2.5 flex flex-col gap-2.5">
+          <div className="max-w-[1536px] mx-auto px-4 md:px-6 py-2.5 flex flex-col gap-2.5">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#071524]/10 pb-2">
               <div className="flex items-center gap-3">
                 <button
@@ -614,7 +615,7 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#E6F6FF] hover:bg-[#D5ECF8] text-[#006A62] text-xs font-bold border border-[#006A62]/20 cursor-pointer"
                   >
                     <Activity className="w-3.5 h-3.5" />
-                    Auditoría 120Hz
+                    Auditoría de Telemetría
                   </button>
                 )}
                 {displayedSnapshot ? (
@@ -632,15 +633,15 @@ export const ClinicalReportPreviewPage: React.FC = () => {
             </div>
 
             {/* Session Selector, DataOrigin Selector, Zoom */}
-            <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
-              <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
                 <div className="flex items-center gap-1.5">
                   <span className="font-bold text-[#071524]">Sesión:</span>
                   <select
                     value={selectedSessionId}
                     onChange={(e) => handleSelectSession(e.target.value)}
                     disabled={sessionsList.length === 0 || loadingInit}
-                    className="bg-[#E6F6FF] border border-[#071524]/15 rounded-lg px-2.5 py-1.5 text-xs font-mono font-semibold text-[#071524] focus:ring-2 focus:ring-[#006A62] cursor-pointer max-w-xs"
+                    className="bg-[#E6F6FF] border border-[#071524]/15 rounded-lg px-2.5 py-1.5 text-xs font-mono font-semibold text-[#071524] focus:ring-2 focus:ring-[#006A62] cursor-pointer max-w-[210px] xl:max-w-xs"
                   >
                     {sessionsList.length === 0 ? (
                       <option value="">Sin sesiones disponibles</option>
@@ -882,14 +883,14 @@ export const ClinicalReportPreviewPage: React.FC = () => {
         </section>
 
         {/* MAIN DOCUMENT VIEWER CANVAS */}
-        <main className="flex-1 overflow-y-auto px-4 py-6 md:py-8 flex justify-center items-start pb-28 print:p-0 print:pb-0">
+        <main className="flex-1 overflow-y-auto overflow-x-auto px-4 py-6 md:py-8 pb-12 print:p-0 print:pb-0">
           {loadingPreview || loadingInit || loadingSnapshotDetail ? (
-            <div className="bg-white rounded-xl border border-[#071524]/10 p-12 shadow-lg flex items-center gap-3 text-sm font-semibold text-[#071524]">
+            <div className="mx-auto w-fit bg-white rounded-xl border border-[#071524]/10 p-12 shadow-lg flex items-center gap-3 text-sm font-semibold text-[#071524]">
               <Loader2 className="w-5 h-5 animate-spin text-[#006A62]" />
               <span>Cargando reporte clínico de sesión...</span>
             </div>
           ) : !displayedReport ? (
-            <div className="bg-white rounded-xl border border-[#071524]/10 p-12 max-w-xl w-full text-center shadow-lg space-y-2">
+            <div className="mx-auto bg-white rounded-xl border border-[#071524]/10 p-12 max-w-xl w-full text-center shadow-lg space-y-2">
               <FileText className="w-10 h-10 text-[#006A62] mx-auto" />
               <h3 className="text-base font-bold text-[#071524]">
                 Sin vista previa de reporte disponible
@@ -899,11 +900,24 @@ export const ClinicalReportPreviewPage: React.FC = () => {
               </p>
             </div>
           ) : (
-            <article
-              id="printable-document"
-              style={{ transform: `scale(${scale})` }}
-              className="w-full max-w-[880px] bg-white text-[#071E27] shadow-2xl rounded-xs border border-[#071524]/10 p-8 md:p-12 transition-transform duration-200 origin-top print:shadow-none print:border-none print:max-w-full"
+            <div
+              className={
+                scale > 1
+                  ? 'mx-auto print:w-full print:max-w-full'
+                  : 'mx-auto w-full max-w-[880px] print:w-full print:max-w-full'
+              }
+              style={scale > 1 ? { width: `${Math.round(880 * scale)}px` } : undefined}
             >
+              <article
+                id="printable-document"
+                style={{
+                  transform: `scale(${scale})`,
+                  marginBottom: scale > 1 ? `${Math.round((scale - 1) * 900)}px` : undefined,
+                }}
+                className={`${
+                  scale > 1 ? 'w-[880px] origin-top-left' : 'w-full origin-top'
+                } bg-white text-[#071E27] shadow-2xl rounded-xs border border-[#071524]/10 p-8 md:p-12 transition-transform duration-200 print:shadow-none print:border-none print:w-full print:max-w-full print:transform-none! print:mb-0!`}
+              >
               {/* DOCUMENT HEADER */}
               <header className="border-b-2 border-[#071524]/20 pb-6 mb-6">
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -1076,7 +1090,10 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                   {displayedReport.visualSearch && (
                     <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
                       <div className="p-3 rounded-lg bg-[#E6F6FF]">
-                        <span className="text-[#44474C] block">Origen</span>
+                        <span className="text-[#44474C] flex items-center gap-1">
+                          Origen
+                          <ClinicalTermTooltip termId="INPUT_ORIGIN" audience="specialist" iconSize={12} />
+                        </span>
                         <strong className="font-mono">{displayedReport.visualSearch.dataOrigin}</strong>
                       </div>
                       <div className="p-3 rounded-lg bg-[#E6F6FF]">
@@ -1097,7 +1114,10 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                         </strong>
                       </div>
                       <div className="p-3 rounded-lg bg-[#E6F6FF]">
-                        <span className="text-[#44474C] block">Mediana Búsqueda</span>
+                        <span className="text-[#44474C] flex items-center gap-1">
+                          Mediana Búsqueda
+                          <ClinicalTermTooltip termId="MEDIAN_DURATION" audience="specialist" iconSize={12} />
+                        </span>
                         <strong className="text-sm">
                           {displayedReport.visualSearch.medianSearchDurationMs !== null
                             ? `${Math.round(displayedReport.visualSearch.medianSearchDurationMs)} ms`
@@ -1110,7 +1130,10 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                   {displayedReport.standardScanning && (
                     <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
                       <div className="p-3 rounded-lg bg-[#E6F6FF]">
-                        <span className="text-[#44474C] block">Origen</span>
+                        <span className="text-[#44474C] flex items-center gap-1">
+                          Origen
+                          <ClinicalTermTooltip termId="INPUT_ORIGIN" audience="specialist" iconSize={12} />
+                        </span>
                         <strong className="font-mono">
                           {displayedReport.standardScanning.dataOrigin}
                         </strong>
@@ -1134,7 +1157,10 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                         </strong>
                       </div>
                       <div className="p-3 rounded-lg bg-[#E6F6FF]">
-                        <span className="text-[#44474C] block">Mediana Localización</span>
+                        <span className="text-[#44474C] flex items-center gap-1">
+                          Mediana Localización
+                          <ClinicalTermTooltip termId="MEDIAN_DURATION" audience="specialist" iconSize={12} />
+                        </span>
                         <strong className="text-sm">
                           {displayedReport.standardScanning.medianLocalizationDurationMs !== null
                             ? `${Math.round(
@@ -1149,7 +1175,10 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                   {displayedReport.sustainedFixation && (
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                       <div className="p-3 rounded-lg bg-[#E6F6FF]">
-                        <span className="text-[#44474C] block">Origen</span>
+                        <span className="text-[#44474C] flex items-center gap-1">
+                          Origen
+                          <ClinicalTermTooltip termId="INPUT_ORIGIN" audience="specialist" iconSize={12} />
+                        </span>
                         <strong className="font-mono">
                           {displayedReport.sustainedFixation.dataOrigin}
                         </strong>
@@ -1178,7 +1207,10 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                   {displayedReport.compensatorySaccade && (
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                       <div className="p-3 rounded-lg bg-[#E6F6FF]">
-                        <span className="text-[#44474C] block">Origen</span>
+                        <span className="text-[#44474C] flex items-center gap-1">
+                          Origen
+                          <ClinicalTermTooltip termId="INPUT_ORIGIN" audience="specialist" iconSize={12} />
+                        </span>
                         <strong className="font-mono">
                           {displayedReport.compensatorySaccade.dataOrigin}
                         </strong>
@@ -1196,7 +1228,10 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                         </strong>
                       </div>
                       <div className="p-3 rounded-lg bg-[#E6F6FF]">
-                        <span className="text-[#44474C] block">Mediana Tiempo al Objetivo</span>
+                        <span className="text-[#44474C] flex items-center gap-1">
+                          Mediana Tiempo al Objetivo
+                          <ClinicalTermTooltip termId="MEDIAN_DURATION" audience="specialist" iconSize={12} />
+                        </span>
                         <strong className="text-sm">
                           {displayedReport.compensatorySaccade.medianTimeToTargetMs !== null
                             ? `${Math.round(
@@ -1289,7 +1324,10 @@ export const ClinicalReportPreviewPage: React.FC = () => {
 
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
                               <div className="p-2.5 rounded bg-white border border-[#071524]/10">
-                                <span className="text-[11px] text-[#44474C] block">Confianza Media</span>
+                                <span className="text-[11px] text-[#44474C] flex items-center gap-1">
+                                  Confianza Media
+                                  <ClinicalTermTooltip termId="CONFIDENCE_MEAN" audience="specialist" iconSize={12} />
+                                </span>
                                 <strong className="text-[#006A62]">
                                   {st.summary.confidence.mean !== null
                                     ? `${(st.summary.confidence.mean * 100).toFixed(1)}%`
@@ -1297,14 +1335,20 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                                 </strong>
                               </div>
                               <div className="p-2.5 rounded bg-white border border-[#071524]/10">
-                                <span className="text-[11px] text-[#44474C] block">Cobertura Espacial</span>
+                                <span className="text-[11px] text-[#44474C] flex items-center gap-1">
+                                  Cobertura Espacial
+                                  <ClinicalTermTooltip termId="QUADRANT_COVERAGE" audience="specialist" iconSize={12} />
+                                </span>
                                 <strong>
                                   {(st.summary.coverage.occupiedCellRatio * 100).toFixed(1)}% (
                                   {st.summary.coverage.occupiedCellCount} celdas)
                                 </strong>
                               </div>
                               <div className="p-2.5 rounded bg-white border border-[#071524]/10">
-                                <span className="text-[11px] text-[#44474C] block">Distancia Gaze Path</span>
+                                <span className="text-[11px] text-[#44474C] flex items-center gap-1">
+                                  Distancia Gaze Path
+                                  <ClinicalTermTooltip termId="GAZE_PATH_DISTANCE" audience="specialist" iconSize={12} />
+                                </span>
                                 <strong>{st.summary.gazePath.totalDistance.toFixed(2)} u</strong>
                               </div>
                               <div className="p-2.5 rounded bg-white border border-[#071524]/10">
@@ -1318,13 +1362,26 @@ export const ClinicalReportPreviewPage: React.FC = () => {
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                               {/* Embedded Heatmap */}
-                              <div className="bg-white border border-[#071524]/10 rounded-lg p-3">
-                                <div className="text-[11px] font-bold text-[#071524] mb-2">
-                                  Heatmap ({grid.columns}×{grid.rows} · {st.heatmap.coordinateSpace})
+                              <div className="bg-white border border-[#071524]/10 rounded-lg p-3 space-y-2">
+                                <div className="flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
+                                  <span className="font-bold text-[#071524] flex items-center gap-1">
+                                    Heatmap ({grid.columns}×{grid.rows} · {st.heatmap.coordinateSpace} · 16:9)
+                                    <ClinicalTermTooltip termId="HEATMAP" audience="specialist" iconSize={12} />
+                                  </span>
+                                  <div className="flex flex-wrap items-center gap-1.5 font-mono text-[10px] text-[#44474C]">
+                                    {st.heatmap.cellWeight && (
+                                      <span className="px-1.5 py-0.5 rounded bg-[#E6F6FF] border border-[#071524]/10">
+                                        cellWeight: {st.heatmap.cellWeight}
+                                      </span>
+                                    )}
+                                    <span className="px-1.5 py-0.5 rounded bg-[#E6F6FF] border border-[#071524]/10">
+                                      confidenceFiltered: {st.heatmap.confidenceFiltered ? 'true' : 'false'}
+                                    </span>
+                                  </div>
                                 </div>
                                 {grid.columns > 0 && grid.rows > 0 ? (
                                   <div
-                                    className="grid gap-0.5 aspect-[16/10]"
+                                    className="grid gap-0.5 aspect-video"
                                     style={{
                                       gridTemplateColumns: `repeat(${grid.columns}, minmax(0, 1fr))`,
                                       gridTemplateRows: `repeat(${grid.rows}, minmax(0, 1fr))`,
@@ -1342,19 +1399,35 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                                 ) : (
                                   <div className="text-[11px] text-[#74777C]">Sin celdas</div>
                                 )}
+                                <div className="pt-1 border-t border-[#071524]/10 space-y-1 text-[10px] text-[#44474C]">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span>0 muestras</span>
+                                    <div
+                                      className="h-2 flex-1 rounded"
+                                      style={{
+                                        background: `linear-gradient(to right, ${heatFillColor(0)}, ${heatFillColor(0.5)}, ${heatFillColor(1)})`,
+                                      }}
+                                    />
+                                    <span>Pico relativo ({peak})</span>
+                                  </div>
+                                  <p>
+                                    La intensidad representa conteos relativos de muestras observadas en espacio normalizado 16:9 (no equivale a duración de fijación ni constituye diagnóstico automatizado).
+                                  </p>
+                                </div>
                               </div>
 
                               {/* Embedded Gaze Plot */}
-                              <div className="bg-white border border-[#071524]/10 rounded-lg p-3">
-                                <div className="text-[11px] font-bold text-[#071524] mb-2">
-                                  Gaze Plot ({points.length} puntos observados)
+                              <div className="bg-white border border-[#071524]/10 rounded-lg p-3 space-y-2">
+                                <div className="text-[11px] font-bold text-[#071524] flex items-center gap-1">
+                                  Gaze Plot ({points.length} puntos observados · lienzo 16:9)
+                                  <ClinicalTermTooltip termId="GAZE_PLOT" audience="specialist" iconSize={12} />
                                 </div>
                                 <svg
-                                  viewBox="0 0 400 250"
-                                  className="w-full h-auto bg-[#F3FAFF] rounded border border-[#071524]/10"
+                                  viewBox="0 0 400 225"
+                                  className="w-full aspect-video bg-[#F3FAFF] rounded border border-[#071524]/10"
                                 >
-                                  <line x1={200} y1={0} x2={200} y2={250} stroke="#071524" strokeOpacity={0.12} />
-                                  <line x1={0} y1={125} x2={400} y2={125} stroke="#071524" strokeOpacity={0.12} />
+                                  <line x1={200} y1={0} x2={200} y2={225} stroke="#071524" strokeOpacity={0.12} />
+                                  <line x1={0} y1={112.5} x2={400} y2={112.5} stroke="#071524" strokeOpacity={0.12} />
                                   {points.map((pt, idx) => {
                                     if (idx === 0 || pt.segmentBreakBefore) return null;
                                     const prev = points[idx - 1];
@@ -1362,9 +1435,9 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                                       <line
                                         key={`l-${idx}`}
                                         x1={clamp01(prev.x) * 400}
-                                        y1={clamp01(prev.y) * 250}
+                                        y1={clamp01(prev.y) * 225}
                                         x2={clamp01(pt.x) * 400}
-                                        y2={clamp01(pt.y) * 250}
+                                        y2={clamp01(pt.y) * 225}
                                         stroke="#006A62"
                                         strokeWidth={1.2}
                                         strokeOpacity={0.5}
@@ -1375,13 +1448,19 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                                     <circle
                                       key={`p-${idx}`}
                                       cx={clamp01(pt.x) * 400}
-                                      cy={clamp01(pt.y) * 250}
+                                      cy={clamp01(pt.y) * 225}
                                       r={3}
                                       fill={pt.confidence >= 0.7 ? '#006A62' : '#C97E41'}
                                       fillOpacity={0.75}
                                     />
                                   ))}
                                 </svg>
+                                {st.gazePlot?.hasNext && (
+                                  <div className="p-2 rounded bg-[#FFF4E5] border border-[#FFE0B2] text-[#8C4A00] text-[10px] font-semibold">
+                                    Vista previa acotada: solo se muestra la primera página de puntos de mirada ({points.length} puntos
+                                    {st.gazePlot.pageSize ? `, límite ${st.gazePlot.pageSize}` : ''}). Existen más puntos en la auditoría de telemetría.
+                                  </div>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -1439,13 +1518,14 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                   </div>
                 </div>
               </footer>
-            </article>
+              </article>
+            </div>
           )}
         </main>
 
         {/* FLOATING ACTIONS BAR */}
-        <aside className="print:hidden fixed bottom-0 left-0 right-0 z-50 bg-white/95 backdrop-blur-md border-t border-[#071524]/10 py-3 px-4 shadow-[0_-4px_20px_rgba(0,0,0,0.06)]">
-          <div className="max-w-[1280px] mx-auto flex flex-wrap items-center justify-between gap-3">
+        <aside className="print:hidden sticky bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-[#071524]/10 py-3 px-4 shadow-[0_-4px_20px_rgba(0,0,0,0.06)]">
+          <div className="max-w-[1536px] mx-auto flex flex-wrap items-center justify-between gap-3">
             <div className="hidden sm:flex items-center gap-3">
               <div className="w-9 h-9 rounded-lg bg-[#E6F6FF] flex items-center justify-center text-[#071524]">
                 <FileText className="w-5 h-5 text-[#006A62]" />
@@ -1540,7 +1620,7 @@ export const ClinicalReportPreviewPage: React.FC = () => {
 
       {/* CLINICAL TOP NAVIGATION BAR */}
       <header className="print:hidden sticky top-0 z-40 bg-white border-b border-[#071524]/10 shadow-xs">
-        <div className="max-w-[1440px] mx-auto px-4 md:px-6 py-2.5 flex flex-col gap-2">
+        <div className="max-w-[1536px] mx-auto px-4 md:px-6 py-2.5 flex flex-col gap-2">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#071524]/10 pb-2">
             <div className="flex items-center gap-3">
               <button
@@ -1660,12 +1740,25 @@ export const ClinicalReportPreviewPage: React.FC = () => {
       </header>
 
       {/* MAIN DOCUMENT VIEWER CANVAS */}
-      <main className="flex-1 overflow-y-auto px-4 py-8 md:py-12 flex justify-center items-start pb-32 print:p-0 print:pb-0">
-        <article
-          id="printable-document"
-          style={{ transform: `scale(${scale})` }}
-          className="w-full max-w-[840px] bg-white text-[#071E27] shadow-2xl rounded-xs border border-[#071524]/10 p-8 md:p-14 transition-transform duration-200 origin-top print:shadow-none print:border-none print:max-w-full"
+      <main className="flex-1 overflow-y-auto overflow-x-auto px-4 py-8 md:py-12 pb-12 print:p-0 print:pb-0">
+        <div
+          className={
+            scale > 1
+              ? 'mx-auto print:w-full print:max-w-full'
+              : 'mx-auto w-full max-w-[840px] print:w-full print:max-w-full'
+          }
+          style={scale > 1 ? { width: `${Math.round(840 * scale)}px` } : undefined}
         >
+          <article
+            id="printable-document"
+            style={{
+              transform: `scale(${scale})`,
+              marginBottom: scale > 1 ? `${Math.round((scale - 1) * 900)}px` : undefined,
+            }}
+            className={`${
+              scale > 1 ? 'w-[840px] origin-top-left' : 'w-full origin-top'
+            } bg-white text-[#071E27] shadow-2xl rounded-xs border border-[#071524]/10 p-8 md:p-14 transition-transform duration-200 print:shadow-none print:border-none print:w-full print:max-w-full print:transform-none! print:mb-0!`}
+          >
           <header className="border-b-2 border-[#071524]/20 pb-6 mb-6">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
               <div className="flex items-center gap-3">
@@ -1761,7 +1854,7 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                 <div className="bg-[#C7DDE9]/40 border border-[#071524]/10 rounded-lg p-4 flex flex-col items-center">
                   <div className="text-xs font-semibold text-[#071524] mb-2 self-start flex items-center gap-1.5">
                     <Target className="w-4 h-4 text-[#006A62]" />
-                    Campimetría de Escaneo Sacádico a 120Hz
+                    Campimetría de Escaneo Sacádico (Muestras Oculares Webcam)
                   </div>
 
                   <div className="relative w-56 h-56 rounded-full border-2 border-[#071524]/20 bg-white flex items-center justify-center overflow-hidden my-2 shadow-inner">
@@ -1801,7 +1894,7 @@ export const ClinicalReportPreviewPage: React.FC = () => {
 
                   <div className="flex justify-between w-full text-[11px] text-[#44474C] px-2 mt-1">
                     <span>0° Fóvea Central</span>
-                    <span className="text-[#006A62] font-bold">120 Hz Telemetría Binocular</span>
+                    <span className="text-[#006A62] font-bold">Muestras Oculares Webcam</span>
                   </div>
                 </div>
 
@@ -1854,7 +1947,10 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                   <tbody className="divide-y divide-[#071524]/5">
                     <tr className="hover:bg-[#E6F6FF]/50">
                       <td className="py-2.5 px-4 font-semibold text-[#071524]">
-                        Tasa de Omisión en Hemicampo Ciego
+                        <span className="inline-flex items-center gap-1.5">
+                          Tasa de Omisión en Hemicampo Ciego
+                          <ClinicalTermTooltip termId="TRIAL_SUCCESS_OMISSIONS" audience="specialist" iconSize={13} />
+                        </span>
                         <span className="block text-[11px] font-normal text-[#44474C]">
                           Estímulos periféricos no detectados
                         </span>
@@ -1870,7 +1966,10 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                     </tr>
                     <tr className="hover:bg-[#E6F6FF]/50">
                       <td className="py-2.5 px-4 font-semibold text-[#071524]">
-                        Estabilidad de Fijación Foveal
+                        <span className="inline-flex items-center gap-1.5">
+                          Estabilidad de Fijación Foveal
+                          <ClinicalTermTooltip termId="BCEA" audience="specialist" iconSize={13} />
+                        </span>
                         <span className="block text-[11px] font-normal text-[#44474C]">
                           Área BCEA 68% (grados cuadrados)
                         </span>
@@ -1886,7 +1985,10 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                     </tr>
                     <tr className="hover:bg-[#E6F6FF]/50">
                       <td className="py-2.5 px-4 font-semibold text-[#071524]">
-                        Latencia Sacádica Hacia Hemicampo Afectado
+                        <span className="inline-flex items-center gap-1.5">
+                          Latencia Sacádica Hacia Hemicampo Afectado
+                          <ClinicalTermTooltip termId="SACCADIC_LATENCY" audience="specialist" iconSize={13} />
+                        </span>
                         <span className="block text-[11px] font-normal text-[#44474C]">
                           Tiempo de respuesta a estímulo visual súbito
                         </span>
@@ -1902,9 +2004,12 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                     </tr>
                     <tr className="hover:bg-[#E6F6FF]/50">
                       <td className="py-2.5 px-4 font-semibold text-[#071524]">
-                        Adherencia y Calidad de Muestreo
+                        <span className="inline-flex items-center gap-1.5">
+                          Adherencia y Calidad de Muestreo
+                          <ClinicalTermTooltip termId="CONFIDENCE_MEAN" audience="specialist" iconSize={13} />
+                        </span>
                         <span className="block text-[11px] font-normal text-[#44474C]">
-                          Validez corneal continua a 120Hz
+                          Validez continua de muestras oculares webcam
                         </span>
                       </td>
                       <td className="py-2.5 px-3 font-mono text-[#44474C]">--</td>
@@ -2013,18 +2118,19 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                   <strong className="text-[#071524]">SHA-256 Hash:</strong>{' '}
                   e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
                 </div>
-                <div className="text-[9px] text-[#74777C] pt-1">
-                  Hoja {currentPage} de 2 • NeuroVisión Rehab Clinical Engine v4.8
+                  <div className="text-[9px] text-[#74777C] pt-1">
+                    Hoja {currentPage} de 2 • NeuroVisión Rehab Clinical Engine v4.8
+                  </div>
                 </div>
               </div>
-            </div>
-          </footer>
-        </article>
+            </footer>
+          </article>
+        </div>
       </main>
 
       {/* FLOATING ACTIONS BAR */}
-      <aside className="print:hidden fixed bottom-0 left-0 right-0 z-50 bg-white/95 backdrop-blur-md border-t border-[#071524]/10 py-3 px-4 shadow-[0_-4px_20px_rgba(0,0,0,0.06)]">
-        <div className="max-w-[1280px] mx-auto flex flex-wrap items-center justify-between gap-4">
+      <aside className="print:hidden sticky bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-[#071524]/10 py-3 px-4 shadow-[0_-4px_20px_rgba(0,0,0,0.06)]">
+        <div className="max-w-[1536px] mx-auto flex flex-wrap items-center justify-between gap-4">
           <div className="hidden sm:flex items-center gap-3">
             <div className="w-9 h-9 rounded-lg bg-[#E6F6FF] flex items-center justify-center text-[#071524]">
               <FileText className="w-5 h-5 text-[#006A62]" />

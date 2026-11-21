@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '../../../../core/store/useAppStore';
 import type { Patient, SessionRecord } from '../../../../core/domain/Patient';
+import { ClinicalTermTooltip } from '../../../shared/components/ClinicalTermTooltip';
 import { SpecialistHeader } from '../components/SpecialistHeader';
 import { SpecialistFooter } from '../components/SpecialistFooter';
 import { SessionAnalyticsModal } from '../components/SessionAnalyticsModal';
@@ -1095,7 +1096,7 @@ export const SessionTelemetryAuditPage: React.FC = () => {
           onOpenNotifications={() => showToast('Telemetría (8084) y Analítica (8085) conectadas.')}
         />
 
-        <main className="flex-1 w-full max-w-[1400px] mx-auto px-4 md:px-8 py-6 flex flex-col gap-6">
+        <main className="flex-1 w-full max-w-[1536px] mx-auto px-4 md:px-8 py-6 flex flex-col gap-6">
           {/* Breadcrumb & Header */}
           <div className="flex flex-col gap-3">
             <nav className="flex items-center gap-2 text-xs font-medium text-[#44474C] overflow-x-auto whitespace-nowrap py-1">
@@ -1343,8 +1344,9 @@ export const SessionTelemetryAuditPage: React.FC = () => {
                 </div>
 
                 <div className="bg-white border border-[#071524]/10 rounded-xl p-4 shadow-xs">
-                  <div className="text-[11px] font-bold uppercase tracking-wider text-[#44474C]">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-[#44474C] flex items-center gap-1">
                     Muestras & Completitud (8085)
+                    <ClinicalTermTooltip termId="SEQUENCE_COMPLETENESS" audience="specialist" iconSize={12} />
                   </div>
                   <div className="text-xl font-extrabold text-[#071524] mt-1">
                     {streamSummary
@@ -1361,8 +1363,9 @@ export const SessionTelemetryAuditPage: React.FC = () => {
                 </div>
 
                 <div className="bg-white border border-[#071524]/10 rounded-xl p-4 shadow-xs">
-                  <div className="text-[11px] font-bold uppercase tracking-wider text-[#44474C]">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-[#44474C] flex items-center gap-1">
                     Confianza & Trayectoria Ocular
+                    <ClinicalTermTooltip termId="CONFIDENCE_MEAN" audience="specialist" iconSize={12} />
                   </div>
                   <div className="text-xl font-extrabold text-[#006A62] mt-1">
                     {streamSummary?.metrics.confidence.mean !== null &&
@@ -1386,6 +1389,7 @@ export const SessionTelemetryAuditPage: React.FC = () => {
                   <h2 className="text-sm font-bold text-[#071524] flex items-center gap-2">
                     <Ruler className="w-4 h-4 text-[#006A62]" />
                     Resumen de Ensayos Clínicos ({trialDataOrigin})
+                    <ClinicalTermTooltip termId="INPUT_ORIGIN" audience="specialist" />
                   </h2>
                   <div className="flex items-center gap-2">
                     <select
@@ -1441,7 +1445,10 @@ export const SessionTelemetryAuditPage: React.FC = () => {
                           </strong>
                         </div>
                         <div className="p-2.5 rounded-lg bg-[#E6F6FF]">
-                          <span className="text-[11px] text-[#44474C] block">Mediana Búsqueda</span>
+                          <span className="text-[11px] text-[#44474C] flex items-center gap-1">
+                            Mediana Búsqueda
+                            <ClinicalTermTooltip termId="MEDIAN_DURATION" audience="specialist" iconSize={12} />
+                          </span>
                           <strong className="text-[#071524]">
                             {trialSummary.medianSearchDurationMs !== null
                               ? `${Math.round(trialSummary.medianSearchDurationMs)} ms`
@@ -1465,7 +1472,10 @@ export const SessionTelemetryAuditPage: React.FC = () => {
                           </strong>
                         </div>
                         <div className="p-2.5 rounded-lg bg-[#E6F6FF]">
-                          <span className="text-[11px] text-[#44474C] block">Mediana Localización</span>
+                          <span className="text-[11px] text-[#44474C] flex items-center gap-1">
+                            Mediana Localización
+                            <ClinicalTermTooltip termId="MEDIAN_DURATION" audience="specialist" iconSize={12} />
+                          </span>
                           <strong className="text-[#071524]">
                             {trialSummary.medianLocalizationDurationMs !== null
                               ? `${Math.round(trialSummary.medianLocalizationDurationMs)} ms`
@@ -1495,7 +1505,10 @@ export const SessionTelemetryAuditPage: React.FC = () => {
                           <strong className="text-[#006A62]">{trialSummary.reachedTargetCount}</strong>
                         </div>
                         <div className="p-2.5 rounded-lg bg-[#E6F6FF]">
-                          <span className="text-[11px] text-[#44474C] block">Mediana Tiempo</span>
+                          <span className="text-[11px] text-[#44474C] flex items-center gap-1">
+                            Mediana Tiempo
+                            <ClinicalTermTooltip termId="MEDIAN_DURATION" audience="specialist" iconSize={12} />
+                          </span>
                           <strong className="text-[#071524]">
                             {trialSummary.medianTimeToTargetMs !== null
                               ? `${Math.round(trialSummary.medianTimeToTargetMs)} ms`
@@ -1538,6 +1551,7 @@ export const SessionTelemetryAuditPage: React.FC = () => {
                       <h2 className="text-sm font-bold text-[#071524] flex items-center gap-2">
                         <Grid3X3 className="w-4 h-4 text-[#006A62]" />
                         Mapa de Calor Normalizado [0..1]
+                        <ClinicalTermTooltip termId="HEATMAP" audience="specialist" />
                       </h2>
                       <p className="text-[11px] text-[#44474C]">
                         {streamHeatmap
@@ -1685,8 +1699,9 @@ export const SessionTelemetryAuditPage: React.FC = () => {
                   {/* Confidence Histogram */}
                   {streamSummary && streamSummary.metrics.confidenceHistogram.length > 0 && (
                     <div className="pt-2 border-t border-[#071524]/10">
-                      <div className="text-[11px] font-bold text-[#44474C] mb-1.5">
+                      <div className="text-[11px] font-bold text-[#44474C] mb-1.5 flex items-center gap-1">
                         Histograma de Confianza (bins 0..1)
+                        <ClinicalTermTooltip termId="CONFIDENCE_MEAN" audience="specialist" iconSize={12} />
                       </div>
                       <div className="flex items-end gap-1 h-12">
                         {streamSummary.metrics.confidenceHistogram.map((binCount, idx) => {
@@ -1713,6 +1728,7 @@ export const SessionTelemetryAuditPage: React.FC = () => {
                       <h2 className="text-sm font-bold text-[#071524] flex items-center gap-2">
                         <Crosshair className="w-4 h-4 text-[#006A62]" />
                         Gaze Plot Vectorial [0..1] (Fijaciones & Sacadas)
+                        <ClinicalTermTooltip termId="GAZE_PLOT" audience="specialist" />
                       </h2>
                       <p className="text-[11px] text-[#44474C]">
                         {gazePlotPoints.length} punto(s) cargados
@@ -2637,8 +2653,9 @@ export const SessionTelemetryAuditPage: React.FC = () => {
 
           <div className="bg-[#E6F6FF] border border-[#071524]/10 rounded-xl p-4 flex flex-col justify-between shadow-xs">
             <div className="flex justify-between items-start">
-              <span className="text-xs font-bold uppercase tracking-wider text-[#44474C]">
+              <span className="text-xs font-bold uppercase tracking-wider text-[#44474C] flex items-center gap-1">
                 Índice Medio de Mirada
+                <ClinicalTermTooltip termId="CONFIDENCE_MEAN" audience="specialist" iconSize={13} />
               </span>
               <span className="p-1.5 rounded-lg bg-[#81F3E5] text-[#005049]">
                 <Eye className="w-4 h-4" />
@@ -2657,8 +2674,9 @@ export const SessionTelemetryAuditPage: React.FC = () => {
 
           <div className="bg-[#E6F6FF] border border-[#071524]/10 rounded-xl p-4 flex flex-col justify-between shadow-xs">
             <div className="flex justify-between items-start">
-              <span className="text-xs font-bold uppercase tracking-wider text-[#44474C]">
+              <span className="text-xs font-bold uppercase tracking-wider text-[#44474C] flex items-center gap-1">
                 Error Angular Medio
+                <ClinicalTermTooltip termId="ANGULAR_ERROR" audience="specialist" iconSize={13} />
               </span>
               <span className="p-1.5 rounded-lg bg-[#DBF1FE] text-[#071524]">
                 <Ruler className="w-4 h-4" />

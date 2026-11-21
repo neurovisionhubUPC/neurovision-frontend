@@ -434,20 +434,20 @@ export const PatientDetailModal: React.FC<PatientDetailModalProps> = ({
                 <div className="flex items-center justify-center gap-8 py-2">
                   {/* Campímetro Izquierdo */}
                   <div className="flex flex-col items-center">
-                    <div className="w-24 h-24 rounded-full border-2 border-[#071524] overflow-hidden flex shadow-xs">
+                    <div className="w-28 h-28 rounded-full border-2 border-[#071524] overflow-hidden flex shadow-xs">
                       <div
-                        className={`w-1/2 h-full flex items-center justify-center text-[10px] font-bold ${
+                        className={`w-1/2 h-full flex items-center justify-center text-[9px] px-1 text-center leading-tight font-bold ${
                           isLeft ? 'bg-[#071524] text-white' : 'bg-[#E6F6FF] text-[#006A62]'
                         }`}
                       >
-                        {isLeft ? 'Defecto' : 'Preservado'}
+                        {isLeft ? 'Defecto' : 'Sano'}
                       </div>
                       <div
-                        className={`w-1/2 h-full flex items-center justify-center text-[10px] font-bold ${
+                        className={`w-1/2 h-full flex items-center justify-center text-[9px] px-1 text-center leading-tight font-bold ${
                           !isLeft ? 'bg-[#071524] text-white' : 'bg-[#E6F6FF] text-[#006A62]'
                         }`}
                       >
-                        {!isLeft ? 'Defecto' : 'Preservado'}
+                        {!isLeft ? 'Defecto' : 'Sano'}
                       </div>
                     </div>
                     <span className="text-[11px] text-[#44474C] mt-1.5 font-semibold">Ojo Izquierdo</span>
@@ -455,20 +455,20 @@ export const PatientDetailModal: React.FC<PatientDetailModalProps> = ({
 
                   {/* Campímetro Derecho */}
                   <div className="flex flex-col items-center">
-                    <div className="w-24 h-24 rounded-full border-2 border-[#071524] overflow-hidden flex shadow-xs">
+                    <div className="w-28 h-28 rounded-full border-2 border-[#071524] overflow-hidden flex shadow-xs">
                       <div
-                        className={`w-1/2 h-full flex items-center justify-center text-[10px] font-bold ${
+                        className={`w-1/2 h-full flex items-center justify-center text-[9px] px-1 text-center leading-tight font-bold ${
                           isLeft ? 'bg-[#071524] text-white' : 'bg-[#E6F6FF] text-[#006A62]'
                         }`}
                       >
-                        {isLeft ? 'Defecto' : 'Preservado'}
+                        {isLeft ? 'Defecto' : 'Sano'}
                       </div>
                       <div
-                        className={`w-1/2 h-full flex items-center justify-center text-[10px] font-bold ${
+                        className={`w-1/2 h-full flex items-center justify-center text-[9px] px-1 text-center leading-tight font-bold ${
                           !isLeft ? 'bg-[#071524] text-white' : 'bg-[#E6F6FF] text-[#006A62]'
                         }`}
                       >
-                        {!isLeft ? 'Defecto' : 'Preservado'}
+                        {!isLeft ? 'Defecto' : 'Sano'}
                       </div>
                     </div>
                     <span className="text-[11px] text-[#44474C] mt-1.5 font-semibold">Ojo Derecho</span>

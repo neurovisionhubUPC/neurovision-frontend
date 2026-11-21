@@ -41,7 +41,8 @@ export interface EnvironmentalValidationResult {
 export const useEnvironmentalValidation = (
   videoRef: React.RefObject<HTMLVideoElement | null>,
   isStreaming: boolean,
-  rawMetricsRef: React.RefObject<any>
+  rawMetricsRef: React.RefObject<any>,
+  measuredFps: number | null = null
 ): EnvironmentalValidationResult => {
   const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const smoothedLuxRef = useRef<number>(420);
@@ -55,7 +56,7 @@ export const useEnvironmentalValidation = (
       isCovered: false,
       isFrozen: false,
       status: 'CONNECTING',
-      fps: 60,
+      fps: 0,
       label: 'CONECTANDO...',
       description: 'Iniciando captura de video...',
       passed: false,
@@ -180,7 +181,12 @@ export const useEnvironmentalValidation = (
       } else {
         cameraStatus = 'CONNECTED';
         cameraLabel = 'CONECTADA';
-        cameraDesc = 'Señal de vídeo nítida recibida a 60 fotogramas por segundo. Adecuada para medir micro-sacadas y fijaciones oculares.';
+        cameraDesc =
+          measuredFps !== null && measuredFps > 0
+            ? measuredFps < 4
+              ? `Stream activo, pero inferencia real en ${measuredFps.toFixed(1)} Hz (< 4 Hz mínimos recomendados para fijación continua). Mejore iluminación o cierre pestañas pesadas.`
+              : `Señal de vídeo activa con inferencia medida en ${measuredFps.toFixed(1)} Hz (mínimo clínico ≥ 4 Hz).`
+            : 'Flujo de cámara activo; midiendo frecuencia real de inferencia facial...';
         cameraPassed = true;
       }
 
@@ -277,7 +283,7 @@ export const useEnvironmentalValidation = (
           isCovered,
           isFrozen,
           status: cameraStatus,
-          fps: 60,
+          fps: measuredFps !== null && measuredFps > 0 ? Number(measuredFps.toFixed(1)) : 0,
           label: cameraLabel,
           description: cameraDesc,
           passed: cameraPassed,
@@ -305,7 +311,7 @@ export const useEnvironmentalValidation = (
     }, 100);
 
     return () => clearInterval(intervalId);
-  }, [videoRef, isStreaming, rawMetricsRef]);
+  }, [videoRef, isStreaming, rawMetricsRef, measuredFps]);
 
   return validation;
 };
