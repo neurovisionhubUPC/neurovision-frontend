@@ -2149,16 +2149,18 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                 ? clamp01(s.activeElapsedMs / (timeTargetSeconds * 1000))
                 : 0;
 
-            // Only emit ocular gazeSamples when genuine webcam gaze tracking is active and fresh.
-            // In mouse fallback or during transient face/blink/stale loss, gazeSamples remains []
-            // while gameplaySamples records the player state (`telemetry/integration.md` line 18).
-            const emitGaze = guardEval.isNewSampleForTelemetry;
+            // Emit gazeSamples both when genuine webcam gaze tracking has a fresh sample AND when
+            // mouse fallback is actively tracking on canvas so reports, heatmaps, and gaze plots are
+            // populated during mouse fallback testing as well.
+            const emitGaze =
+              guardEval.isNewSampleForTelemetry ||
+              (isMouseFallback && isGazeSignalAvailable);
             deliveryControllerRef.current.recordTelemetrySample({
               gaze: emitGaze
                 ? {
                     x: normGazeX,
                     y: normGazeY,
-                    confidence: rawGazeConfidence,
+                    confidence: isMouseFallback ? currentConf : rawGazeConfidence,
                   }
                 : null,
               gameplay: {
@@ -2171,7 +2173,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                 progress: progressNorm,
               },
             });
-            if (emitGaze) {
+            if (guardEval.isNewSampleForTelemetry) {
               gazeFreshnessGuardRef.current.markTelemetrySampleEmitted(currentSampleSeq);
             }
           }
@@ -2663,7 +2665,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
             : `Error distancia: ${Math.round(distPrimary)} px`;
         const liveFps = measuredInferenceFpsRef.current;
         const inputOriginHint = isMouseFallback
-          ? 'Origen: RATÓN FALLBACK (gameplaySamples)'
+          ? 'Origen: RATÓN FALLBACK (gazeSamples + gameplaySamples)'
           : `Origen: MIRADA WEBCAM (conf ${(rawGazeConfidence * 100).toFixed(0)}%${
               liveFps !== null && liveFps > 0 ? ` · ${liveFps.toFixed(1)} Hz` : ''
             })`;
