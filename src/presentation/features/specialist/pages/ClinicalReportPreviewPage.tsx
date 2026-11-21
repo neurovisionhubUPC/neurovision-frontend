@@ -61,11 +61,23 @@ function extractModeFromDetail(detail: DoctorTherapySessionDetailResponse): Repo
   return detail.configurationParameters.mode;
 }
 
+function getReportTrialCount(report: DoctorSessionReport | null | undefined): number {
+  if (!report) return 0;
+  return (
+    report.visualSearch?.reportedTrialCount ??
+    report.standardScanning?.reportedTrialCount ??
+    report.sustainedFixation?.reportedTrialCount ??
+    report.compensatorySaccade?.reportedTrialCount ??
+    report.systematicExploration?.reportedTrialCount ??
+    0
+  );
+}
+
 function buildReportSelector(
   mode: ReportMode | undefined,
-  origin: 'AUTO' | ReportDataOrigin
+  origin: 'AUTO' | 'BASE_ONLY' | ReportDataOrigin
 ): DoctorReportSelectionQuery | undefined {
-  if (origin === 'AUTO' || !mode) return undefined;
+  if (origin === 'AUTO' || origin === 'BASE_ONLY' || !mode) return undefined;
   const key = modeToReportSelectorKey(mode);
   switch (key) {
     case 'visualSearchDataOrigin':
@@ -157,7 +169,8 @@ export const ClinicalReportPreviewPage: React.FC = () => {
   const [sessionsList, setSessionsList] = useState<DoctorTherapySessionSummary[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string>(querySessionId || '');
   const [sessionMode, setSessionMode] = useState<ReportMode | undefined>(undefined);
-  const [dataOriginChoice, setDataOriginChoice] = useState<'AUTO' | ReportDataOrigin>('AUTO');
+  const [dataOriginChoice, setDataOriginChoice] = useState<'AUTO' | 'BASE_ONLY' | ReportDataOrigin>('AUTO');
+  const [resolvedAutoOrigin, setResolvedAutoOrigin] = useState<ReportDataOrigin | null>(null);
 
   const [loadingInit, setLoadingInit] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
@@ -278,18 +291,68 @@ export const ClinicalReportPreviewPage: React.FC = () => {
         // Ignore detail error; preview call still surfaces authoritative error
       }
 
-      const selector = buildReportSelector(resolvedMode, dataOriginChoice);
+      const resolvePreviewCall = async (): Promise<{
+        report: DoctorSessionReport;
+        autoOrigin: ReportDataOrigin | null;
+      }> => {
+        if (dataOriginChoice !== 'AUTO' || !resolvedMode) {
+          const explicitSelector = buildReportSelector(resolvedMode, dataOriginChoice);
+          const rep = await clinicalApi.previewSessionReport(
+            patientId,
+            selectedSessionId,
+            explicitSelector
+          );
+          return { report: rep, autoOrigin: null };
+        }
+
+        // In AUTO mode, probe PRODUCER_REPORTED first (webcam gaze); if it has 0 trials,
+        // probe SYNTHETIC (mouse fallback) so Section 2 metrics are populated automatically.
+        const producerSelector = buildReportSelector(resolvedMode, 'PRODUCER_REPORTED');
+        try {
+          const producerRep = await clinicalApi.previewSessionReport(
+            patientId,
+            selectedSessionId,
+            producerSelector
+          );
+          if (getReportTrialCount(producerRep) > 0) {
+            return { report: producerRep, autoOrigin: 'PRODUCER_REPORTED' };
+          }
+          const syntheticSelector = buildReportSelector(resolvedMode, 'SYNTHETIC');
+          try {
+            const syntheticRep = await clinicalApi.previewSessionReport(
+              patientId,
+              selectedSessionId,
+              syntheticSelector
+            );
+            if (getReportTrialCount(syntheticRep) > 0) {
+              return { report: syntheticRep, autoOrigin: 'SYNTHETIC' };
+            }
+          } catch {
+            // Fall back to producerRep below
+          }
+          return { report: producerRep, autoOrigin: 'PRODUCER_REPORTED' };
+        } catch {
+          const baseRep = await clinicalApi.previewSessionReport(
+            patientId,
+            selectedSessionId,
+            undefined
+          );
+          return { report: baseRep, autoOrigin: null };
+        }
+      };
 
       const [previewOutcome, snapshotsOutcome] = await Promise.allSettled([
-        clinicalApi.previewSessionReport(patientId, selectedSessionId, selector),
+        resolvePreviewCall(),
         clinicalApi.listReportSnapshots(patientId, selectedSessionId, { page: 0, size: 20 }),
       ]);
 
       if (previewOutcome.status === 'fulfilled') {
-        setPreviewReport(previewOutcome.value);
-        setSessionMode(previewOutcome.value.mode);
+        setPreviewReport(previewOutcome.value.report);
+        setResolvedAutoOrigin(previewOutcome.value.autoOrigin);
+        setSessionMode(previewOutcome.value.report.mode);
       } else {
         setPreviewReport(null);
+        setResolvedAutoOrigin(null);
         const err = previewOutcome.reason;
         if (err instanceof ApiError && err.status === 409) {
           setPreviewError(
@@ -316,7 +379,7 @@ export const ClinicalReportPreviewPage: React.FC = () => {
     void loadPreviewAndSnapshots();
   }, [loadPreviewAndSnapshots]);
 
-  const handleDataOriginChange = (nextOrigin: 'AUTO' | ReportDataOrigin) => {
+  const handleDataOriginChange = (nextOrigin: 'AUTO' | 'BASE_ONLY' | ReportDataOrigin) => {
     setDataOriginChoice(nextOrigin);
     setDisplayedSnapshot(null);
     setSnapshotActionError(null);
@@ -329,7 +392,11 @@ export const ClinicalReportPreviewPage: React.FC = () => {
     setSnapshotActionError(null);
     try {
       const effectiveMode = previewReport?.mode || sessionMode;
-      const selector = buildReportSelector(effectiveMode, dataOriginChoice);
+      const effectiveOrigin =
+        dataOriginChoice === 'AUTO'
+          ? resolvedAutoOrigin ?? 'BASE_ONLY'
+          : dataOriginChoice;
+      const selector = buildReportSelector(effectiveMode, effectiveOrigin);
       const created = await clinicalApi.createReportSnapshot(
         patientId,
         selectedSessionId,
@@ -660,13 +727,18 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                   <select
                     value={dataOriginChoice}
                     onChange={(e) =>
-                      handleDataOriginChange(e.target.value as 'AUTO' | ReportDataOrigin)
+                      handleDataOriginChange(
+                        e.target.value as 'AUTO' | 'BASE_ONLY' | ReportDataOrigin
+                      )
                     }
                     className="bg-[#E6F6FF] border border-[#071524]/15 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-[#071524] focus:ring-2 focus:ring-[#006A62] cursor-pointer"
                   >
-                    <option value="AUTO">Automático (Backend default)</option>
-                    <option value="PRODUCER_REPORTED">PRODUCER_REPORTED</option>
-                    <option value="SYNTHETIC">SYNTHETIC</option>
+                    <option value="AUTO">
+                      Automático (Webcam / Ratón)
+                    </option>
+                    <option value="PRODUCER_REPORTED">PRODUCER_REPORTED (Webcam)</option>
+                    <option value="SYNTHETIC">SYNTHETIC (Ratón Fallback)</option>
+                    <option value="BASE_ONLY">Solo Base (Sin métricas de ensayos)</option>
                   </select>
                 </div>
 
@@ -1321,6 +1393,23 @@ export const ClinicalReportPreviewPage: React.FC = () => {
                                 {st.summary.completeness.sampleCounts.total}
                               </span>
                             </div>
+
+                            {st.summary.completeness.sampleCounts.gaze === 0 &&
+                              st.summary.completeness.sampleCounts.gameplay > 0 && (
+                                <div className="p-2.5 rounded-lg bg-[#FFF4E5] border border-[#FFE0B2] text-[#8C4A00] text-[11px] font-medium">
+                                  <strong>Modo Ratón Fallback (0 muestras oculares de cámara):</strong>{' '}
+                                  Este stream contiene{' '}
+                                  <strong>
+                                    {st.summary.completeness.sampleCounts.gameplay} muestras de
+                                    gameplay
+                                  </strong>{' '}
+                                  y <strong>0 muestras de mirada ocular (gazeSamples)</strong>. Por
+                                  regla del contrato de Telemetría y Analytics, el Heatmap y el Gaze
+                                  Plot solo grafican muestras oculares de webcam (
+                                  <code>RAW_GAZE_SAMPLE_COUNT</code>), no movimientos del cursor del
+                                  ratón.
+                                </div>
+                              )}
 
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
                               <div className="p-2.5 rounded bg-white border border-[#071524]/10">
