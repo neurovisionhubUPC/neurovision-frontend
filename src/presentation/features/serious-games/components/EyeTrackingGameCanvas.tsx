@@ -425,7 +425,6 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   const repetitionCounterRef = useRef<number>(sessionProgress?.completedRepetitions ?? 0);
   const currentRepObjRef = useRef<{ id: string; index: number } | null>(null);
   const sessionHadCognitoRef = useRef<boolean>(false);
-  const completionKeyRef = useRef<string>(createUuid());
 
   const sessionStartPerfRef = useRef<number>(performance.now());
   const lastTelemetrySamplePerfRef = useRef<number>(0);
@@ -473,7 +472,6 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
 
     if (!targetSessionId) {
       if (
-        !isCompletingRef.current &&
         completionStateRef.current !== 'FINISHED' &&
         completionStateRef.current !== 'ABANDONED'
       ) {
@@ -494,7 +492,6 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       sessionHadCognitoRef.current = false;
       isBootstrappedRef.current = false;
       isCompletingRef.current = false;
-      completionKeyRef.current = createUuid();
       webcamGazeSamplesCountRef.current = 0;
       mouseFallbackSamplesCountRef.current = 0;
       gazeFreshnessGuardRef.current.reset();
@@ -502,6 +499,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       fallbackSampleSeqRef.current = 0;
       trialUsedMouseFallbackRef.current = localMouseFallbackRef.current;
       sessionTrialOriginsRef.current = { producerReported: 0, synthetic: 0 };
+      completionStateRef.current = 'IDLE';
       setCompletionState('IDLE');
       setBackendWarning(null);
       setSyncSummary(controller.getSyncSummary());
@@ -514,12 +512,21 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         return Promise.resolve();
       }
 
+      const capturedCtx = deliveryControllerRef.current?.getLifecycleContext() ?? null;
+      if (!capturedCtx) {
+        return Promise.resolve();
+      }
+      const isAdmitted = () =>
+        Boolean(deliveryControllerRef.current?.isLifecycleAdmitted(capturedCtx));
+
       eventQueueRef.current = eventQueueRef.current.then(async () => {
+        if (!isAdmitted()) return;
         if (isCompletingRef.current && completionStateRef.current !== 'PENDING_SYNC') return;
         const seq = nextSequenceRef.current;
         const payload = buildEvent(seq);
         try {
-          let progress = await clinicalApi.sendActivityEvent(activeSessionId, payload);
+          let progress = await clinicalApi.sendActivityEvent(capturedCtx.sessionId, payload);
+          if (!isAdmitted()) return;
           nextSequenceRef.current = progress.nextSequence;
           latestProgressRef.current = progress;
           repetitionCounterRef.current = progress.completedRepetitions;
@@ -535,12 +542,13 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
             !isCompletingRef.current
           ) {
             currentRepObjRef.current = null;
-            progress = await clinicalApi.sendActivityEvent(activeSessionId, {
+            progress = await clinicalApi.sendActivityEvent(capturedCtx.sessionId, {
               schemaVersion: 1,
               eventId: createUuid(),
               sequence: progress.nextSequence,
               type: 'RESUMED',
             });
+            if (!isAdmitted()) return;
             nextSequenceRef.current = progress.nextSequence;
             latestProgressRef.current = progress;
             repetitionCounterRef.current = progress.completedRepetitions;
@@ -553,7 +561,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               };
               currentRepObjRef.current = repObj;
               repetitionCounterRef.current = repObj.index;
-              progress = await clinicalApi.sendActivityEvent(activeSessionId, {
+              progress = await clinicalApi.sendActivityEvent(capturedCtx.sessionId, {
                 schemaVersion: 1,
                 eventId: createUuid(),
                 sequence: progress.nextSequence,
@@ -561,19 +569,22 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                 repetitionId: repObj.id,
                 repetitionIndex: repObj.index,
               });
+              if (!isAdmitted()) return;
               nextSequenceRef.current = progress.nextSequence;
               latestProgressRef.current = progress;
             }
           }
 
-          if (isMountedRef.current) {
+          if (isMountedRef.current && isAdmitted()) {
             setBackendWarning(null);
             onSessionProgressUpdate?.(progress);
           }
         } catch (err) {
+          if (!isAdmitted()) return;
           if (err instanceof ApiError && err.status === 409) {
             try {
-              let synced = await clinicalApi.getSessionProgress(activeSessionId);
+              let synced = await clinicalApi.getSessionProgress(capturedCtx.sessionId);
+              if (!isAdmitted()) return;
               nextSequenceRef.current = synced.nextSequence;
               latestProgressRef.current = synced;
               repetitionCounterRef.current = synced.completedRepetitions;
@@ -587,12 +598,13 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                 !isCompletingRef.current
               ) {
                 currentRepObjRef.current = null;
-                synced = await clinicalApi.sendActivityEvent(activeSessionId, {
+                synced = await clinicalApi.sendActivityEvent(capturedCtx.sessionId, {
                   schemaVersion: 1,
                   eventId: createUuid(),
                   sequence: synced.nextSequence,
                   type: 'RESUMED',
                 });
+                if (!isAdmitted()) return;
                 nextSequenceRef.current = synced.nextSequence;
                 latestProgressRef.current = synced;
 
@@ -603,7 +615,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                   };
                   currentRepObjRef.current = repObj;
                   repetitionCounterRef.current = repObj.index;
-                  synced = await clinicalApi.sendActivityEvent(activeSessionId, {
+                  synced = await clinicalApi.sendActivityEvent(capturedCtx.sessionId, {
                     schemaVersion: 1,
                     eventId: createUuid(),
                     sequence: synced.nextSequence,
@@ -611,21 +623,23 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                     repetitionId: repObj.id,
                     repetitionIndex: repObj.index,
                   });
+                  if (!isAdmitted()) return;
                   nextSequenceRef.current = synced.nextSequence;
                   latestProgressRef.current = synced;
                 }
               }
 
-              if (isMountedRef.current) {
+              if (isMountedRef.current && isAdmitted()) {
                 setBackendWarning(null);
                 onSessionProgressUpdate?.(synced);
               }
               return;
             } catch {
+              if (!isAdmitted()) return;
               // Ignore secondary sync failure
             }
           }
-          if (isMountedRef.current) {
+          if (isMountedRef.current && isAdmitted()) {
             setBackendWarning(
               `Sincronización clínica pendiente: ${extractApiErrorMessage(err)}`
             );
@@ -1079,81 +1093,38 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
 
   const runCloseSessionFlow = useCallback(
     async (forceCloseWithoutSync: boolean) => {
-      if (!isCognitoSession || !activeSessionId) return;
+      if (!isCognitoSession || !activeSessionId || !deliveryControllerRef.current) return;
 
-      if (isMountedRef.current) {
-        completionStateRef.current = 'SAVING';
-        setCompletionState('SAVING');
-      }
-
-      // Wait for all in-flight trial results, ordered activity events & remaining telemetry samples
-      // BEFORE closing the clinical session (analytics requires a live ACTIVE clinical session!)
-      const [, gate] = await Promise.all([
-        eventQueueRef.current.catch(() => undefined),
-        deliveryControllerRef.current
-          ? deliveryControllerRef.current.prepareClosure(forceCloseWithoutSync)
-          : Promise.resolve(null),
-      ]);
-
-      if (isMountedRef.current && gate) {
-        setSyncSummary(gate.summary);
-      }
-
-      if (gate && !gate.allowedToClose) {
-        if (isMountedRef.current) {
-          completionStateRef.current = 'PENDING_SYNC';
-          setCompletionState('PENDING_SYNC');
-          setBackendWarning(
-            'Hay ensayos o lotes de telemetría pendientes o con estado incierto antes de cerrar la sesión clínica.'
-          );
-        }
-        return;
-      }
-
-      let latestProg = latestProgressRef.current;
-      try {
-        latestProg = await clinicalApi.getSessionProgress(activeSessionId);
-        latestProgressRef.current = latestProg;
-      } catch {
-        // Fallback to cached latestProgressRef
-      }
-
-      // Strict completion guard: ONLY send FINISHED when targetReached === true
-      const canFinish = Boolean(latestProg?.targetReached);
-      const action: 'FINISHED' | 'ABANDONED' = canFinish ? 'FINISHED' : 'ABANDONED';
-
-      if (latestProg && latestProg.status !== 'ACTIVE') {
-        const mapped =
-          latestProg.status === 'COMPLETED' ? 'FINISHED' : 'ABANDONED';
-        if (isMountedRef.current) {
-          completionStateRef.current = mapped;
-          setCompletionState(mapped);
-          onSessionProgressUpdate?.(latestProg);
-          onSessionCompleted?.(latestProg, mapped);
-        }
-        return;
-      }
-
-      try {
-        const completed = await clinicalApi.completeSession(
-          activeSessionId,
-          { action },
-          completionKeyRef.current
-        );
-        latestProgressRef.current = completed;
-        if (isMountedRef.current) {
-          completionStateRef.current = action;
-          setCompletionState(action);
-          onSessionProgressUpdate?.(completed);
-          onSessionCompleted?.(completed, action);
-        }
-      } catch (err) {
-        if (isMountedRef.current) {
-          completionStateRef.current = 'ERROR';
-          setCompletionState('ERROR');
-          setBackendWarning(`Cierre de sesión: ${extractApiErrorMessage(err)}`);
-        }
-      }
+      await deliveryControllerRef.current.closeClinicalSession({
+        forceCloseWithoutSync,
+        apis: {
+          getSessionProgress: (therapySessionId) =>
+            clinicalApi.getSessionProgress(therapySessionId),
+          completeSession: (therapySessionId, body, idempotencyKey) =>
+            clinicalApi.completeSession(therapySessionId, body, idempotencyKey),
+        },
+        adapter: {
+          isMounted: () => isMountedRef.current,
+          waitForActivityEvents: () => eventQueueRef.current,
+          getCachedProgress: () => latestProgressRef.current,
+          setCachedProgress: (progress) => {
+            latestProgressRef.current = progress;
+          },
+          setSyncSummary: (summary) => {
+            setSyncSummary(summary);
+          },
+          setCompletionState: (state) => {
+            completionStateRef.current = state;
+            setCompletionState(state);
+          },
+          setBackendWarning: (message) => {
+            setBackendWarning(message);
+          },
+          onSessionProgressUpdate,
+          onSessionCompleted,
+          formatError: extractApiErrorMessage,
+        },
+      });
     },
     [isCognitoSession, activeSessionId, onSessionProgressUpdate, onSessionCompleted]
   );
@@ -1395,6 +1366,13 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
       lastTimeRef.current = performance.now();
 
       if (isCognitoSession && activeSessionId && !isBootstrappedRef.current) {
+        const capturedCtx = deliveryControllerRef.current?.getLifecycleContext() ?? null;
+        const isAdmitted = () =>
+          Boolean(capturedCtx && deliveryControllerRef.current?.isLifecycleAdmitted(capturedCtx));
+        if (!capturedCtx) {
+          return;
+        }
+
         isBootstrappedRef.current = true;
         sessionHadCognitoRef.current = true;
 
@@ -1404,11 +1382,13 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         spawnModeTrial(false);
 
         eventQueueRef.current = eventQueueRef.current.then(async () => {
+          if (!isAdmitted()) return;
           try {
             const [detail, progress] = await Promise.all([
-              clinicalApi.getPatientSessionDetail(activeSessionId),
-              clinicalApi.getSessionProgress(activeSessionId),
+              clinicalApi.getPatientSessionDetail(capturedCtx.sessionId),
+              clinicalApi.getSessionProgress(capturedCtx.sessionId),
             ]);
+            if (!isAdmitted()) return;
 
             if (detail.technicalProgress) {
               gameState.current.activeElapsedMs = detail.technicalProgress.activeMilliseconds;
@@ -1421,20 +1401,22 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
             latestProgressRef.current = progress;
             currentRepObjRef.current = null;
 
-            if (isMountedRef.current) {
+            if (isMountedRef.current && isAdmitted()) {
               onSessionProgressUpdate?.(progress);
             }
 
             // If recovering a session that already satisfied its completion target, finish immediately
             if (progress.targetReached) {
-              void finishSession('TARGET_REACHED');
+              if (isAdmitted()) {
+                void finishSession('TARGET_REACHED');
+              }
               return;
             }
 
             let activeProg = progress;
 
             if (progress.activityState === 'NEW') {
-              activeProg = await clinicalApi.sendActivityEvent(activeSessionId, {
+              activeProg = await clinicalApi.sendActivityEvent(capturedCtx.sessionId, {
                 schemaVersion: 1,
                 eventId: createUuid(),
                 sequence: progress.nextSequence,
@@ -1444,7 +1426,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               progress.activityState === 'PAUSED' ||
               progress.activityState === 'RESUME_REQUIRED'
             ) {
-              activeProg = await clinicalApi.sendActivityEvent(activeSessionId, {
+              activeProg = await clinicalApi.sendActivityEvent(capturedCtx.sessionId, {
                 schemaVersion: 1,
                 eventId: createUuid(),
                 sequence: progress.nextSequence,
@@ -1455,13 +1437,14 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               // Per `clinical/integration.md` (lines 140-142) & `SessionActivityProgress.java`:
               // Sending PAUSED -> RESUMED safely discards any unfinished open repetition (`open = null`),
               // reconciles any >15s gap, re-anchors server time, and renews the 120s lease.
-              const pausedProg = await clinicalApi.sendActivityEvent(activeSessionId, {
+              const pausedProg = await clinicalApi.sendActivityEvent(capturedCtx.sessionId, {
                 schemaVersion: 1,
                 eventId: createUuid(),
                 sequence: progress.nextSequence,
                 type: 'PAUSED',
               });
-              activeProg = await clinicalApi.sendActivityEvent(activeSessionId, {
+              if (!isAdmitted()) return;
+              activeProg = await clinicalApi.sendActivityEvent(capturedCtx.sessionId, {
                 schemaVersion: 1,
                 eventId: createUuid(),
                 sequence: pausedProg.nextSequence,
@@ -1469,13 +1452,15 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               });
             }
 
+            if (!isAdmitted()) return;
+
             nextSequenceRef.current = activeProg.nextSequence;
             repetitionCounterRef.current = activeProg.completedRepetitions;
             gameState.current.score = activeProg.completedRepetitions;
             gameState.current.activeElapsedMs = activeProg.activeMilliseconds;
             latestProgressRef.current = activeProg;
 
-            if (isMountedRef.current) {
+            if (isMountedRef.current && isAdmitted()) {
               onSessionProgressUpdate?.(activeProg);
             }
 
@@ -1487,7 +1472,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
               };
               currentRepObjRef.current = repObj;
               repetitionCounterRef.current = repObj.index;
-              const repProg = await clinicalApi.sendActivityEvent(activeSessionId, {
+              const repProg = await clinicalApi.sendActivityEvent(capturedCtx.sessionId, {
                 schemaVersion: 1,
                 eventId: createUuid(),
                 sequence: activeProg.nextSequence,
@@ -1495,14 +1480,15 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
                 repetitionId: repObj.id,
                 repetitionIndex: repObj.index,
               });
+              if (!isAdmitted()) return;
               nextSequenceRef.current = repProg.nextSequence;
               latestProgressRef.current = repProg;
-              if (isMountedRef.current) {
+              if (isMountedRef.current && isAdmitted()) {
                 onSessionProgressUpdate?.(repProg);
               }
             }
           } catch (err) {
-            if (isMountedRef.current) {
+            if (isMountedRef.current && isAdmitted()) {
               setBackendWarning(
                 `Inicio/recuperación de actividad: ${extractApiErrorMessage(err)}`
               );

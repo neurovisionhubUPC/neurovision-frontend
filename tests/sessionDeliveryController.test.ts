@@ -16,11 +16,17 @@ import type {
   VisualSearchTrialBody,
 } from '../src/infrastructure/api/contracts/analytics.contracts.ts';
 import type {
+  PatientSessionCompletionBody,
+  PatientSessionProgressResponse,
+} from '../src/infrastructure/api/contracts/clinical.contracts.ts';
+import type {
   TelemetryBatchAcceptedResponse,
   TelemetryBatchBody,
 } from '../src/infrastructure/api/contracts/telemetry.contracts.ts';
 import {
   SessionDeliveryController,
+  type ClinicalClosureOutcome,
+  type ClinicalClosureUiState,
   type SessionSyncSummary,
 } from '../src/infrastructure/telemetry/sessionDeliveryController.ts';
 
@@ -599,5 +605,483 @@ describe('SessionDeliveryController', () => {
     assert.equal(trialHangSummary.isSyncComplete, false);
     assert.equal(trialHangSummary.inFlightTrials, 1);
     trialHangController.dispose();
+  });
+});
+
+function makeProgress(
+  therapySessionId: string,
+  overrides: Partial<PatientSessionProgressResponse> = {}
+): PatientSessionProgressResponse {
+  return {
+    therapySessionId,
+    status: 'ACTIVE',
+    nextSequence: 4,
+    activityState: 'ACTIVE',
+    endedAt: null,
+    criterion: 'REPETITIONS',
+    target: 4,
+    activeMilliseconds: 12000,
+    completedRepetitions: 4,
+    targetReached: true,
+    ...overrides,
+  };
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (err: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+describe('SessionDeliveryController — LIFE-POST-GATE clinical closure lifecycle', () => {
+  function createHarness(options?: {
+    sendTelemetryBatch?: (
+      body: TelemetryBatchBody
+    ) => Promise<TelemetryBatchAcceptedResponse>;
+    sendTrialResult?: (
+      therapySessionId: string,
+      slug: AnalyticsExerciseSlug,
+      body: AnyTrialBody
+    ) => Promise<AnalyticsTrialReceipt>;
+  }) {
+    let mounted = true;
+    let cachedProgress: PatientSessionProgressResponse | null = null;
+    let completionState: ClinicalClosureUiState | 'IDLE' = 'IDLE';
+    let backendWarning: string | null = null;
+    let lastSyncSummary: SessionSyncSummary | null = null;
+    let waitForEventsFn: () => Promise<void> = () => Promise.resolve();
+
+    const progressUpdates: PatientSessionProgressResponse[] = [];
+    const completedCalls: Array<{
+      progress: PatientSessionProgressResponse;
+      action: 'FINISHED' | 'ABANDONED';
+    }> = [];
+    const progressCalls: string[] = [];
+    const completionCalls: Array<{
+      sessionId: string;
+      body: PatientSessionCompletionBody;
+      idempotencyKey: string;
+    }> = [];
+
+    const controller = new SessionDeliveryController({
+      maxAttemptsPerFlush: 1,
+      retryBackoffMs: 0,
+      sleep: async () => undefined,
+      uuid: createDeterministicUuid('life'),
+      sendTelemetryBatch:
+        options?.sendTelemetryBatch ?? (async () => ({ code: 'BROKER_ACCEPTED' })),
+      sendTrialResult:
+        options?.sendTrialResult ?? (async () => ({ status: 'CREATED' })),
+      onSyncSummaryChange: (summary) => {
+        lastSyncSummary = summary;
+      },
+    });
+
+    const adapter = {
+      isMounted: () => mounted,
+      waitForActivityEvents: () => waitForEventsFn(),
+      getCachedProgress: () => cachedProgress,
+      setCachedProgress: (progress: PatientSessionProgressResponse) => {
+        cachedProgress = progress;
+      },
+      setSyncSummary: (summary: SessionSyncSummary) => {
+        lastSyncSummary = summary;
+      },
+      setCompletionState: (state: ClinicalClosureUiState) => {
+        completionState = state;
+      },
+      setBackendWarning: (message: string) => {
+        backendWarning = message;
+      },
+      onSessionProgressUpdate: (progress: PatientSessionProgressResponse) => {
+        progressUpdates.push(progress);
+      },
+      onSessionCompleted: (
+        progress: PatientSessionProgressResponse,
+        action: 'FINISHED' | 'ABANDONED'
+      ) => {
+        completedCalls.push({ progress, action });
+      },
+    };
+
+    const apis = {
+      getSessionProgressImpl: async (sessionId: string) => makeProgress(sessionId),
+      completeSessionImpl: async (
+        sessionId: string,
+        body: PatientSessionCompletionBody
+      ) => makeProgress(sessionId, { status: body.action === 'FINISHED' ? 'COMPLETED' : 'ABANDONED' }),
+    };
+
+    function runClose(forceCloseWithoutSync = false): Promise<ClinicalClosureOutcome> {
+      return controller.closeClinicalSession({
+        forceCloseWithoutSync,
+        apis: {
+          getSessionProgress: (sessionId) => {
+            progressCalls.push(sessionId);
+            return apis.getSessionProgressImpl(sessionId);
+          },
+          completeSession: (sessionId, body, idempotencyKey) => {
+            completionCalls.push({ sessionId, body, idempotencyKey });
+            return apis.completeSessionImpl(sessionId, body);
+          },
+        },
+        adapter,
+      });
+    }
+
+    function switchTo(sessionId: string | null): boolean {
+      const changed = controller.syncSession(sessionId, false);
+      if (changed && sessionId !== null) {
+        cachedProgress = makeProgress(sessionId, {
+          completedRepetitions: 0,
+          targetReached: false,
+        });
+        completionState = 'IDLE';
+        backendWarning = null;
+      }
+      return changed;
+    }
+
+    return {
+      controller,
+      apis,
+      runClose,
+      switchTo,
+      setMounted: (next: boolean) => {
+        mounted = next;
+      },
+      setWaitForEvents: (fn: () => Promise<void>) => {
+        waitForEventsFn = fn;
+      },
+      setCachedProgress: (p: PatientSessionProgressResponse | null) => {
+        cachedProgress = p;
+      },
+      setCompletionState: (st: ClinicalClosureUiState | 'IDLE') => {
+        completionState = st;
+      },
+      getState: () => ({
+        cachedProgress,
+        completionState,
+        backendWarning,
+        lastSyncSummary,
+        progressUpdates,
+        completedCalls,
+        progressCalls,
+        completionCalls,
+      }),
+    };
+  }
+
+  it('1. A passes gate -> getSessionProgress(A) waits -> switch to B -> stale A does NOT dispatch completeSession or overwrite B', async () => {
+    const h = createHarness();
+    const progressA = createDeferred<PatientSessionProgressResponse>();
+
+    h.apis.getSessionProgressImpl = (sessionId) => {
+      if (sessionId === 'session-A') {
+        return progressA.promise;
+      }
+      return Promise.resolve(makeProgress(sessionId));
+    };
+
+    h.switchTo('session-A');
+    const closeA = h.runClose(false);
+    await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual(h.getState().progressCalls, ['session-A']);
+
+    // Switch to session B while A is awaiting getSessionProgress(A)
+    h.switchTo('session-B');
+    const bProgressBefore = makeProgress('session-B', {
+      completedRepetitions: 1,
+      targetReached: false,
+    });
+    h.setCachedProgress(bProgressBefore);
+    const bKeyBefore = h.controller.getLifecycleContext()!.completionKey;
+    assert.notEqual(bKeyBefore, null);
+
+    // Late resolution of A's getSessionProgress
+    progressA.resolve(makeProgress('session-A', { targetReached: true }));
+    const outcomeA = await closeA;
+
+    assert.deepEqual(outcomeA, { status: 'STALE_IGNORED' });
+    assert.equal(h.getState().completionCalls.length, 0);
+    assert.equal(h.getState().completionState, 'IDLE');
+    assert.equal(h.getState().cachedProgress?.therapySessionId, 'session-B');
+    assert.equal(h.getState().cachedProgress?.completedRepetitions, 1);
+    assert.equal(h.controller.getLifecycleContext()?.completionKey, bKeyBefore);
+    assert.equal(h.getState().progressUpdates.length, 0);
+    assert.equal(h.getState().completedCalls.length, 0);
+    h.controller.dispose();
+  });
+
+  it('2. Switch to B during waitForActivityEvents or teardown during delivery gate aborts old operation cleanly', async () => {
+    // 2a: Switch to B while waiting for activity events
+    const hEvents = createHarness();
+    const pendingEventsA = createDeferred<void>();
+    hEvents.switchTo('session-A');
+    hEvents.setWaitForEvents(() => pendingEventsA.promise);
+
+    const closeDuringEvents = hEvents.runClose(false);
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(hEvents.getState().completionState, 'SAVING');
+
+    hEvents.switchTo('session-B');
+    hEvents.setWaitForEvents(() => Promise.resolve());
+    pendingEventsA.resolve();
+
+    const outcomeA = await closeDuringEvents;
+    assert.deepEqual(outcomeA, { status: 'STALE_IGNORED' });
+    assert.equal(hEvents.getState().progressCalls.length, 0);
+    assert.equal(hEvents.getState().completionCalls.length, 0);
+    assert.equal(hEvents.getState().completionState, 'IDLE');
+    assert.equal(hEvents.controller.getActiveSessionId(), 'session-B');
+    hEvents.controller.dispose();
+
+    // 2b: Teardown (syncSession(null)) while awaiting delivery gate (telemetry flush)
+    const deferredFlushA = createDeferred<TelemetryBatchAcceptedResponse>();
+    const hGate = createHarness({
+      sendTelemetryBatch: () => deferredFlushA.promise,
+    });
+    hGate.switchTo('session-A-gate');
+    hGate.controller.recordTelemetrySample({
+      gaze: { x: 0.4, y: 0.5, confidence: 0.9 },
+    });
+
+    const closeDuringGate = hGate.runClose(false);
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(hGate.getState().completionState, 'SAVING');
+
+    // Explicit teardown before telemetry flush settles
+    hGate.switchTo(null);
+    hGate.setCompletionState('IDLE');
+    deferredFlushA.resolve({ code: 'BROKER_ACCEPTED' });
+
+    const outcomeGate = await closeDuringGate;
+    assert.deepEqual(outcomeGate, { status: 'STALE_IGNORED' });
+    assert.equal(hGate.getState().progressCalls.length, 0);
+    assert.equal(hGate.getState().completionCalls.length, 0);
+    assert.equal(hGate.getState().completionState, 'IDLE');
+    hGate.controller.dispose();
+  });
+
+  it('3. Teardown and recreate of the SAME session ID rejects the old generation even though sessionId matches', async () => {
+    const h = createHarness();
+    const progressGen1 = createDeferred<PatientSessionProgressResponse>();
+    let callNum = 0;
+
+    h.apis.getSessionProgressImpl = (sessionId) => {
+      callNum += 1;
+      if (callNum === 1) {
+        return progressGen1.promise;
+      }
+      return Promise.resolve(makeProgress(sessionId, { targetReached: true }));
+    };
+
+    h.switchTo('session-same');
+    const ctxGen1 = h.controller.getLifecycleContext()!;
+    const closeGen1 = h.runClose(false);
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Teardown then recreate same sessionId
+    h.switchTo(null);
+    h.switchTo('session-same');
+    const ctxGen2 = h.controller.getLifecycleContext()!;
+    assert.notEqual(ctxGen2.generation, ctxGen1.generation);
+    assert.notEqual(ctxGen2.completionKey, ctxGen1.completionKey);
+
+    // Late settlement from generation 1 must be rejected even though activeSessionId is still 'session-same'
+    progressGen1.resolve(makeProgress('session-same', { targetReached: true }));
+    const outcomeGen1 = await closeGen1;
+    assert.deepEqual(outcomeGen1, { status: 'STALE_IGNORED' });
+    assert.equal(h.getState().completionCalls.length, 0);
+    assert.equal(h.getState().completionState, 'IDLE');
+
+    // Generation 2 can subsequently close normally with its own key
+    const outcomeGen2 = await h.runClose(false);
+    assert.equal(outcomeGen2.status, 'FINISHED');
+    assert.equal(h.getState().completionCalls.length, 1);
+    assert.equal(h.getState().completionCalls[0].idempotencyKey, ctxGen2.completionKey);
+    h.controller.dispose();
+  });
+
+  it('4. completeSession(A) already dispatched -> switch to B -> A settlement or error cannot mutate B UI, key, or SAVING lock', async () => {
+    // 4a: A's completeSession settles successfully after B starts saving
+    const hSuccess = createHarness();
+    const completeA = createDeferred<PatientSessionProgressResponse>();
+    const progressB = createDeferred<PatientSessionProgressResponse>();
+
+    hSuccess.apis.getSessionProgressImpl = (sessionId) => {
+      if (sessionId === 'session-B') return progressB.promise;
+      return Promise.resolve(makeProgress(sessionId, { targetReached: true }));
+    };
+    hSuccess.apis.completeSessionImpl = (sessionId, body) => {
+      if (sessionId === 'session-A') return completeA.promise;
+      return Promise.resolve(
+        makeProgress(sessionId, {
+          status: body.action === 'FINISHED' ? 'COMPLETED' : 'ABANDONED',
+        })
+      );
+    };
+
+    hSuccess.switchTo('session-A');
+    const keyA = hSuccess.controller.getLifecycleContext()!.completionKey;
+    const closeA = hSuccess.runClose(false);
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(hSuccess.getState().completionCalls.length, 1);
+    assert.equal(hSuccess.getState().completionCalls[0].idempotencyKey, keyA);
+
+    // Switch to B and begin B's closure (B enters SAVING)
+    hSuccess.switchTo('session-B');
+    const keyB = hSuccess.controller.getLifecycleContext()!.completionKey;
+    const closeB = hSuccess.runClose(false);
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(hSuccess.getState().completionState, 'SAVING');
+
+    // Settle stale completeSession(A) with COMPLETED -> must be ignored without clearing B's SAVING state or callbacks
+    completeA.resolve(makeProgress('session-A', { status: 'COMPLETED' }));
+    const outcomeA = await closeA;
+    assert.deepEqual(outcomeA, { status: 'STALE_IGNORED', dispatchedWithKey: keyA });
+    assert.equal(hSuccess.getState().completionState, 'SAVING');
+    assert.equal(hSuccess.getState().cachedProgress?.therapySessionId, 'session-B');
+    assert.equal(hSuccess.getState().completedCalls.length, 0);
+    assert.equal(hSuccess.getState().progressUpdates.length, 0);
+
+    // B continues and finishes cleanly with B's own key
+    progressB.resolve(makeProgress('session-B', { targetReached: true }));
+    const outcomeB = await closeB;
+    assert.equal(outcomeB.status, 'FINISHED');
+    assert.equal(hSuccess.getState().completionCalls.length, 2);
+    assert.equal(hSuccess.getState().completionCalls[1].sessionId, 'session-B');
+    assert.equal(hSuccess.getState().completionCalls[1].idempotencyKey, keyB);
+    assert.equal(hSuccess.getState().completedCalls.length, 1);
+    assert.equal(
+      hSuccess.getState().completedCalls[0].progress.therapySessionId,
+      'session-B'
+    );
+    hSuccess.controller.dispose();
+
+    // 4b: A's completeSession fails with 500 after B starts saving -> stale catch/finally cannot touch B
+    const hErr = createHarness();
+    const failA = createDeferred<PatientSessionProgressResponse>();
+    const progressB2 = createDeferred<PatientSessionProgressResponse>();
+
+    hErr.apis.getSessionProgressImpl = (sessionId) => {
+      if (sessionId === 'session-B2') return progressB2.promise;
+      return Promise.resolve(makeProgress(sessionId, { targetReached: true }));
+    };
+    hErr.apis.completeSessionImpl = (sessionId) => {
+      if (sessionId === 'session-A2') return failA.promise;
+      return Promise.resolve(makeProgress(sessionId, { status: 'COMPLETED' }));
+    };
+
+    hErr.switchTo('session-A2');
+    const keyA2 = hErr.controller.getLifecycleContext()!.completionKey;
+    const closeA2 = hErr.runClose(false);
+    await new Promise((r) => setTimeout(r, 0));
+
+    hErr.switchTo('session-B2');
+    const closeB2 = hErr.runClose(false);
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(hErr.getState().completionState, 'SAVING');
+
+    failA.reject(new ApiError(500, 'SERVER_ERROR', 'Late failure from A2'));
+    const outcomeA2 = await closeA2;
+    assert.deepEqual(outcomeA2, { status: 'STALE_IGNORED', dispatchedWithKey: keyA2 });
+    assert.equal(hErr.getState().completionState, 'SAVING');
+    assert.equal(hErr.getState().backendWarning, null);
+
+    progressB2.resolve(makeProgress('session-B2', { targetReached: true }));
+    const outcomeB2 = await closeB2;
+    assert.equal(outcomeB2.status, 'FINISHED');
+    hErr.controller.dispose();
+  });
+
+  it('5. Current session completion and retry paths (PENDING_SYNC / ERROR) keep the exact same original completionKey', async () => {
+    let failTelemetryOnce = true;
+    let failCompleteOnce = true;
+    const h = createHarness({
+      sendTelemetryBatch: async () => {
+        if (failTelemetryOnce) {
+          throw new ApiError(503, 'TELEMETRY_INGESTION_UNAVAILABLE', 'Retry telemetry');
+        }
+        return { code: 'BROKER_ACCEPTED' };
+      },
+    });
+    h.apis.getSessionProgressImpl = async (sessionId) =>
+      makeProgress(sessionId, { targetReached: true });
+    h.apis.completeSessionImpl = async (sessionId) => {
+      if (failCompleteOnce) {
+        failCompleteOnce = false;
+        throw new ApiError(503, 'COMPLETION_UNCERTAIN', 'Timeout on completion');
+      }
+      return makeProgress(sessionId, { status: 'COMPLETED', targetReached: true });
+    };
+
+    h.switchTo('session-retry-key');
+    const originalKey = h.controller.getLifecycleContext()!.completionKey;
+    h.controller.recordTelemetrySample({
+      gaze: { x: 0.5, y: 0.5, confidence: 0.9 },
+    });
+
+    // Attempt 1: hits PENDING_SYNC on telemetry gate
+    const first = await h.runClose(false);
+    assert.equal(first.status, 'PENDING_SYNC');
+    assert.equal(h.getState().completionCalls.length, 0);
+
+    // Attempt 2: telemetry now succeeds, completeSession fails transiently -> ERROR
+    failTelemetryOnce = false;
+    const second = await h.runClose(false);
+    assert.equal(second.status, 'ERROR');
+    assert.equal(h.getState().completionCalls.length, 1);
+    assert.equal(h.getState().completionCalls[0].idempotencyKey, originalKey);
+
+    // Attempt 3: retry completeSession reuses the EXACT same original completionKey
+    const third = await h.runClose(true);
+    assert.equal(third.status, 'FINISHED');
+    assert.equal(h.getState().completionCalls.length, 2);
+    assert.equal(h.getState().completionCalls[1].idempotencyKey, originalKey);
+    assert.equal(h.getState().completedCalls.length, 1);
+    h.controller.dispose();
+  });
+
+  it('6. Repeated close clicks while A closure is pending coalesce into one active operation with one completion call', async () => {
+    const h = createHarness();
+    const progressGate = createDeferred<PatientSessionProgressResponse>();
+    const completeGate = createDeferred<PatientSessionProgressResponse>();
+
+    h.apis.getSessionProgressImpl = () => progressGate.promise;
+    h.apis.completeSessionImpl = () => completeGate.promise;
+
+    h.switchTo('session-coalesce');
+    const originalKey = h.controller.getLifecycleContext()!.completionKey;
+
+    const click1 = h.runClose(false);
+    const click2 = h.runClose(false);
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(h.getState().progressCalls.length, 1);
+
+    progressGate.resolve(makeProgress('session-coalesce', { targetReached: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Third click while completeSession is in flight
+    const click3 = h.runClose(false);
+    assert.equal(h.getState().completionCalls.length, 1);
+    assert.equal(h.getState().completionCalls[0].idempotencyKey, originalKey);
+
+    completeGate.resolve(
+      makeProgress('session-coalesce', { status: 'COMPLETED', targetReached: true })
+    );
+    const [res1, res2, res3] = await Promise.all([click1, click2, click3]);
+
+    assert.equal(res1.status, 'FINISHED');
+    assert.deepEqual(res2, res1);
+    assert.deepEqual(res3, res1);
+    assert.equal(h.getState().progressCalls.length, 1);
+    assert.equal(h.getState().completionCalls.length, 1);
+    assert.equal(h.getState().completedCalls.length, 1);
+    h.controller.dispose();
   });
 });
