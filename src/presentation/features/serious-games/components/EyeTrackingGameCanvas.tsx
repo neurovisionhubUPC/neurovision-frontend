@@ -642,7 +642,10 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   }, [activeSessionId, isCognitoSession, resolvedAccountKey]);
 
   const enqueueActivityEvent = useCallback(
-    (buildEvent: (seq: number) => PatientActivityEventBody): Promise<void> => {
+    (
+      buildEvent: (seq: number) => PatientActivityEventBody,
+      options?: { allowDuringCompletion?: boolean }
+    ): Promise<void> => {
       if (!isCognitoSession || !activeSessionId) {
         return Promise.resolve();
       }
@@ -656,7 +659,13 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
 
       eventQueueRef.current = eventQueueRef.current.then(async () => {
         if (!isAdmitted()) return;
-        if (isCompletingRef.current && completionStateRef.current !== 'PENDING_SYNC') return;
+        if (
+          isCompletingRef.current &&
+          !options?.allowDuringCompletion &&
+          completionStateRef.current !== 'PENDING_SYNC'
+        ) {
+          return;
+        }
         const seq = nextSequenceRef.current;
         const payload = buildEvent(seq);
         try {
@@ -1414,50 +1423,59 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
           if (currentRepObjRef.current) {
             const repObj = currentRepObjRef.current;
             currentRepObjRef.current = null;
-            void enqueueActivityEvent((seq) => {
-              const baseCompleted =
-                latestProgressRef.current?.completedRepetitions ?? repetitionCounterRef.current;
-              const idx = repObj.index > 0 ? repObj.index : baseCompleted + 1;
-              return {
-                schemaVersion: 1,
-                eventId: createUuid(),
-                sequence: seq,
-                type: 'REPETITION_FINISHED',
-                repetitionId: repObj.id,
-                repetitionIndex: idx,
-              };
-            });
+            void enqueueActivityEvent(
+              (seq) => {
+                const baseCompleted =
+                  latestProgressRef.current?.completedRepetitions ?? repetitionCounterRef.current;
+                const idx = repObj.index > 0 ? repObj.index : baseCompleted + 1;
+                return {
+                  schemaVersion: 1,
+                  eventId: createUuid(),
+                  sequence: seq,
+                  type: 'REPETITION_FINISHED',
+                  repetitionId: repObj.id,
+                  repetitionIndex: idx,
+                };
+              },
+              { allowDuringCompletion: true }
+            );
           } else {
             // If trial 1 completed before bootstrap finished opening the initial repetition,
             // open and immediately close the repetition sequentially on the eventQueue so it is never lost.
             const fallbackRepId = createUuid();
-            void enqueueActivityEvent((seq) => {
-              const baseCompleted =
-                latestProgressRef.current?.completedRepetitions ?? repetitionCounterRef.current;
-              const idx = baseCompleted + 1;
-              repetitionCounterRef.current = idx;
-              return {
-                schemaVersion: 1,
-                eventId: createUuid(),
-                sequence: seq,
-                type: 'REPETITION_STARTED',
-                repetitionId: fallbackRepId,
-                repetitionIndex: idx,
-              };
-            });
-            void enqueueActivityEvent((seq) => {
-              const baseCompleted =
-                latestProgressRef.current?.completedRepetitions ?? repetitionCounterRef.current;
-              const idx = baseCompleted + 1;
-              return {
-                schemaVersion: 1,
-                eventId: createUuid(),
-                sequence: seq,
-                type: 'REPETITION_FINISHED',
-                repetitionId: fallbackRepId,
-                repetitionIndex: idx,
-              };
-            });
+            void enqueueActivityEvent(
+              (seq) => {
+                const baseCompleted =
+                  latestProgressRef.current?.completedRepetitions ?? repetitionCounterRef.current;
+                const idx = baseCompleted + 1;
+                repetitionCounterRef.current = idx;
+                return {
+                  schemaVersion: 1,
+                  eventId: createUuid(),
+                  sequence: seq,
+                  type: 'REPETITION_STARTED',
+                  repetitionId: fallbackRepId,
+                  repetitionIndex: idx,
+                };
+              },
+              { allowDuringCompletion: true }
+            );
+            void enqueueActivityEvent(
+              (seq) => {
+                const baseCompleted =
+                  latestProgressRef.current?.completedRepetitions ?? repetitionCounterRef.current;
+                const idx = baseCompleted + 1;
+                return {
+                  schemaVersion: 1,
+                  eventId: createUuid(),
+                  sequence: seq,
+                  type: 'REPETITION_FINISHED',
+                  repetitionId: fallbackRepId,
+                  repetitionIndex: idx,
+                };
+              },
+              { allowDuringCompletion: true }
+            );
           }
         } else if (currentRepObjRef.current) {
           // A timed-out trial must NOT count as a completed repetition in Clinical.
