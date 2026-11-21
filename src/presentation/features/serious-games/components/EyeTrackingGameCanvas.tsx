@@ -1410,45 +1410,112 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         recordSubmittedTrialOrigin(trialBody.dataOrigin);
         void submitTrialAnalytics(trialBody);
 
-        if (currentRepObjRef.current) {
-          const repObj = currentRepObjRef.current;
+        if (wasSuccessful) {
+          if (currentRepObjRef.current) {
+            const repObj = currentRepObjRef.current;
+            currentRepObjRef.current = null;
+            void enqueueActivityEvent((seq) => {
+              const baseCompleted =
+                latestProgressRef.current?.completedRepetitions ?? repetitionCounterRef.current;
+              const idx = repObj.index > 0 ? repObj.index : baseCompleted + 1;
+              return {
+                schemaVersion: 1,
+                eventId: createUuid(),
+                sequence: seq,
+                type: 'REPETITION_FINISHED',
+                repetitionId: repObj.id,
+                repetitionIndex: idx,
+              };
+            });
+          } else {
+            // If trial 1 completed before bootstrap finished opening the initial repetition,
+            // open and immediately close the repetition sequentially on the eventQueue so it is never lost.
+            const fallbackRepId = createUuid();
+            void enqueueActivityEvent((seq) => {
+              const baseCompleted =
+                latestProgressRef.current?.completedRepetitions ?? repetitionCounterRef.current;
+              const idx = baseCompleted + 1;
+              repetitionCounterRef.current = idx;
+              return {
+                schemaVersion: 1,
+                eventId: createUuid(),
+                sequence: seq,
+                type: 'REPETITION_STARTED',
+                repetitionId: fallbackRepId,
+                repetitionIndex: idx,
+              };
+            });
+            void enqueueActivityEvent((seq) => {
+              const baseCompleted =
+                latestProgressRef.current?.completedRepetitions ?? repetitionCounterRef.current;
+              const idx = baseCompleted + 1;
+              return {
+                schemaVersion: 1,
+                eventId: createUuid(),
+                sequence: seq,
+                type: 'REPETITION_FINISHED',
+                repetitionId: fallbackRepId,
+                repetitionIndex: idx,
+              };
+            });
+          }
+        } else if (currentRepObjRef.current) {
+          // A timed-out trial must NOT count as a completed repetition in Clinical.
+          // Discard the open repetition via PAUSED -> RESUMED so the next trial re-opens at completedRepetitions + 1.
           currentRepObjRef.current = null;
-          void enqueueActivityEvent((seq) => {
-            const idx = repObj.index > 0 ? repObj.index : ++repetitionCounterRef.current;
-            return {
-              schemaVersion: 1,
-              eventId: createUuid(),
-              sequence: seq,
-              type: 'REPETITION_FINISHED',
-              repetitionId: repObj.id,
-              repetitionIndex: idx,
-            };
-          });
+          void enqueueActivityEvent((seq) => ({
+            schemaVersion: 1,
+            eventId: createUuid(),
+            sequence: seq,
+            type: 'PAUSED',
+          }));
+          void enqueueActivityEvent((seq) => ({
+            schemaVersion: 1,
+            eventId: createUuid(),
+            sequence: seq,
+            type: 'RESUMED',
+          }));
         }
       }
 
       // Evaluate completion criteria
-      const serverReached = Boolean(
-        isCognitoSession &&
-          activeSessionId &&
+      if (isCognitoSession && activeSessionId) {
+        const expectedServerReps =
+          requiredReps !== null
+            ? (latestProgressRef.current?.completedRepetitions ?? 0) + (wasSuccessful ? 1 : 0)
+            : null;
+        const serverReached = Boolean(
           latestProgressRef.current?.therapySessionId === activeSessionId &&
-          latestProgressRef.current?.targetReached
-      );
-      const localRepGoalReached =
-        requiredReps !== null && s.score >= requiredReps;
-      const localTimeGoalReached =
-        timeTargetSeconds !== null && s.activeElapsedMs >= timeTargetSeconds * 1000;
-      const maxSafetyTrialsReached =
-        requiredReps !== null && s.completedTrials >= requiredReps * 3;
+            (latestProgressRef.current?.targetReached ||
+              (requiredReps !== null &&
+                expectedServerReps !== null &&
+                expectedServerReps >= requiredReps))
+        );
+        const localTimeGoalReached =
+          timeTargetSeconds !== null && s.activeElapsedMs >= timeTargetSeconds * 1000;
+        const maxSafetyTrialsReached =
+          requiredReps !== null && s.completedTrials >= requiredReps * 3;
 
-      if (
-        serverReached ||
-        localRepGoalReached ||
-        localTimeGoalReached ||
-        maxSafetyTrialsReached
-      ) {
-        void finishSession('TARGET_REACHED');
-        return;
+        if (serverReached || localTimeGoalReached || maxSafetyTrialsReached) {
+          void finishSession('TARGET_REACHED');
+          return;
+        }
+      } else {
+        const localRepGoalReached =
+          requiredReps !== null && s.score >= requiredReps;
+        const localTimeGoalReached =
+          timeTargetSeconds !== null && s.activeElapsedMs >= timeTargetSeconds * 1000;
+        const maxSafetyTrialsReached =
+          requiredReps !== null && s.completedTrials >= requiredReps * 3;
+
+        if (
+          localRepGoalReached ||
+          localTimeGoalReached ||
+          maxSafetyTrialsReached
+        ) {
+          void finishSession('TARGET_REACHED');
+          return;
+        }
       }
 
       // Inter-stimulus rest / rest between repetitions
@@ -1669,7 +1736,12 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
             }
 
             // Now open the first/replacement repetition at `completedRepetitions + 1`
-            if (!isCompletingRef.current && !isPausedRef.current) {
+            // only if the canvas is currently in an active trial (and not in INTER_STIMULUS_REST)
+            if (
+              !isCompletingRef.current &&
+              !isPausedRef.current &&
+              gameState.current.subPhase !== 'INTER_STIMULUS_REST'
+            ) {
               const repObj = {
                 id: createUuid(),
                 index: activeProg.completedRepetitions + 1,
