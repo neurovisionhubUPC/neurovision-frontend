@@ -21,6 +21,7 @@ import {
   EyeOff,
   ArrowLeft,
   Key,
+  Type,
 } from 'lucide-react';
 import loginImage from '../../../../assets/login-image.png';
 import { useAppStore, type UserRole, type AuthMode } from '../../../../core/store/useAppStore';
@@ -30,6 +31,7 @@ import { profileApi } from '../../../../infrastructure/api/profileApi';
 import {
   BACKEND_SERVICES_META,
   checkAllServicesHealth,
+  getServiceEndpointDisplay,
   type ServiceHealthInfo,
 } from '../../../../infrastructure/api/healthApi';
 import {
@@ -70,21 +72,31 @@ function formatExpiration(exp: number | null): string {
 
 export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const navigate = useNavigate();
-  const { setAccessToken, setAuthMode, setBackendHealth } = useAppStore();
+  const {
+    setAccessToken,
+    setAuthMode,
+    setBackendHealth,
+    highVisibilityMode,
+    toggleHighVisibilityMode,
+  } = useAppStore();
 
   const cognitoConfig = useMemo(() => getCognitoConfig(), []);
 
   // Backend health state
   const [servicesHealth, setServicesHealth] = useState<ServiceHealthInfo[]>(() =>
-    BACKEND_SERVICES_META.map((meta) => ({
-      service: meta.service,
-      label: meta.label,
-      port: meta.port,
-      swaggerUrl: meta.swaggerUrl,
-      ready: false,
-      statusText: 'Verificando...',
-      latencyMs: null,
-    }))
+    BACKEND_SERVICES_META.map((meta) => {
+      const { endpointDisplay, swaggerUrl } = getServiceEndpointDisplay(meta);
+      return {
+        service: meta.service,
+        label: meta.label,
+        port: meta.port,
+        endpointDisplay,
+        swaggerUrl,
+        ready: false,
+        statusText: 'Verificando...',
+        latencyMs: null,
+      };
+    })
   );
   const [checkingHealth, setCheckingHealth] = useState(false);
   const [healthExpanded, setHealthExpanded] = useState(false);
@@ -518,7 +530,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const totalCount = servicesHealth.length;
 
   return (
-    <div className="min-h-screen lg:h-screen bg-bgMain font-sans">
+    <div className="wcag-patient-surface min-h-screen lg:h-screen bg-bgMain font-sans">
       <div className="min-h-screen lg:h-full max-w-[1920px] mx-auto w-full flex">
         {/* Columna Izquierda - Imagen */}
         <div className="hidden lg:flex lg:w-[44%] 2xl:max-w-[880px] p-4 pl-4 pr-0 h-full shrink-0">
@@ -541,16 +553,32 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
       </div>
 
       {/* Columna Derecha - Formularios y Paneles */}
-      <div className="w-full lg:w-[56%] flex flex-col justify-between p-6 sm:p-10 lg:px-14 lg:py-8 bg-bgMain lg:overflow-y-auto">
+      <div className="wcag-patient-surface w-full lg:w-[56%] flex flex-col justify-between p-6 sm:p-10 lg:px-14 lg:py-8 bg-bgMain lg:overflow-y-auto">
         <div className="w-full max-w-lg mx-auto my-auto py-4 space-y-6">
-          {/* Header Principal */}
-          <div>
-            <h1 className="text-3xl sm:text-[2.35rem] font-bold text-primary mb-2 leading-tight tracking-tight">
-              Bienvenido a<br />NeuroVisión Rehab
-            </h1>
-            <p className="text-neutral text-sm">
-              Inicia sesión con tu cuenta corporativa AWS Cognito, Bearer JWT de desarrollo o Modo Demo local.
-            </p>
+          {/* Header Principal + Botón WCAG 2.2 AAA */}
+          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+            <div>
+              <h1 className="text-3xl sm:text-[2.35rem] font-bold text-primary mb-2 leading-tight tracking-tight">
+                Bienvenido a<br />NeuroVisión Rehab
+              </h1>
+              <p className="text-neutral text-sm">
+                Inicia sesión con tu cuenta corporativa AWS Cognito, Bearer JWT de desarrollo o Modo Demo local.
+              </p>
+            </div>
+            <button
+              type="button"
+              aria-pressed={highVisibilityMode}
+              onClick={toggleHighVisibilityMode}
+              title="Alternar modo de alta visibilidad WCAG 2.2 AAA (contraste >= 7:1, escala +19% y áreas >= 44px)"
+              className={`inline-flex items-center space-x-1.5 px-3 py-2 rounded-xl border text-xs font-extrabold shrink-0 transition-all cursor-pointer ${
+                highVisibilityMode
+                  ? 'bg-[#FFFF00] text-[#071524] border-2 border-[#071524] shadow-xs'
+                  : 'bg-[#EBF7FD] text-[#1C2A39] border-[#CDE9FA] hover:bg-[#DCEFF9]'
+              }`}
+            >
+              <Type size={15} />
+              <span>{highVisibilityMode ? 'WCAG AAA: Activo' : 'Alta Visibilidad +'}</span>
+            </button>
           </div>
 
           {/* Global Auth Alerts */}
@@ -1320,21 +1348,27 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                           {svc.label}
                         </span>
                         <span className="text-[10px] text-[#44474C]">
-                          :{svc.port} · {svc.statusText}
+                          <span className="font-mono">{svc.endpointDisplay}</span> · {svc.statusText}
                           {svc.latencyMs !== null ? ` (${svc.latencyMs} ms)` : ''}
                         </span>
                       </div>
                     </div>
 
-                    <a
-                      href={svc.swaggerUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded bg-white border border-[#C4C6CC]/70 text-[#006A62] hover:bg-[#DBF1FE] font-bold text-[10px] shrink-0 transition-colors"
-                    >
-                      <span>Swagger</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
+                    {svc.swaggerUrl ? (
+                      <a
+                        href={svc.swaggerUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded bg-white border border-[#C4C6CC]/70 text-[#006A62] hover:bg-[#DBF1FE] font-bold text-[10px] shrink-0 transition-colors"
+                      >
+                        <span>Swagger</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#E6F6FF] border border-[#CDE9FA] text-[#006A62] font-bold text-[10px] shrink-0">
+                        Gateway TLS
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>

@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { SeriousGamesPage } from './presentation/features/serious-games/pages/SeriousGamesPage';
 import { LoginPage } from './presentation/features/auth/pages/LoginPage';
@@ -11,7 +12,16 @@ import { FineParameterConfigPage } from './presentation/features/specialist/page
 import { useAppStore } from './core/store/useAppStore';
 
 function App() {
-  const { isAuthenticated, userRole, login } = useAppStore();
+  const { isAuthenticated, userRole, login, highVisibilityMode } = useAppStore();
+
+  useEffect(() => {
+    const rootEl = document.documentElement;
+    if (highVisibilityMode) {
+      rootEl.classList.add('wcag-aaa-mode');
+    } else {
+      rootEl.classList.remove('wcag-aaa-mode');
+    }
+  }, [highVisibilityMode]);
 
   return (
     <BrowserRouter>

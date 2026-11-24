@@ -25,6 +25,7 @@ import { parseJwtClaims } from '../../../../infrastructure/api/cognitoAuth';
 import {
   BACKEND_SERVICES_META,
   checkAllServicesHealth,
+  getServiceEndpointDisplay,
   type ServiceHealthInfo,
 } from '../../../../infrastructure/api/healthApi';
 import { ProfileOnboardingModal } from './ProfileOnboardingModal';
@@ -117,15 +118,19 @@ export const SpecialistHeader: React.FC<SpecialistHeaderProps> = ({
   const [healthPopoverOpen, setHealthPopoverOpen] = useState(false);
   const [checkingHealth, setCheckingHealth] = useState(false);
   const [servicesInfo, setServicesInfo] = useState<ServiceHealthInfo[]>(() =>
-    BACKEND_SERVICES_META.map((meta) => ({
-      service: meta.service,
-      label: meta.label,
-      port: meta.port,
-      swaggerUrl: meta.swaggerUrl,
-      ready: backendHealth[meta.service],
-      statusText: backendHealth[meta.service] ? 'UP' : 'Sin verificar',
-      latencyMs: null,
-    }))
+    BACKEND_SERVICES_META.map((meta) => {
+      const { endpointDisplay, swaggerUrl } = getServiceEndpointDisplay(meta);
+      return {
+        service: meta.service,
+        label: meta.label,
+        port: meta.port,
+        endpointDisplay,
+        swaggerUrl,
+        ready: backendHealth[meta.service],
+        statusText: backendHealth[meta.service] ? 'UP' : 'Sin verificar',
+        latencyMs: null,
+      };
+    })
   );
 
   // Notifications Popover state
@@ -441,7 +446,7 @@ export const SpecialistHeader: React.FC<SpecialistHeaderProps> = ({
                             {svc.label}
                           </div>
                           <div className="text-[11px] text-[#44474C] flex items-center gap-2">
-                            <span className="font-mono">:{svc.port}</span>
+                            <span className="font-mono">{svc.endpointDisplay}</span>
                             <span>·</span>
                             <span>
                               {svc.statusText}
@@ -451,15 +456,21 @@ export const SpecialistHeader: React.FC<SpecialistHeaderProps> = ({
                         </div>
                       </div>
 
-                      <a
-                        href={svc.swaggerUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white border border-[#C4C6CC]/70 text-[#006A62] hover:bg-[#DBF1FE] text-[11px] font-bold shrink-0 transition-colors"
-                      >
-                        <span>Swagger</span>
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
+                      {svc.swaggerUrl ? (
+                        <a
+                          href={svc.swaggerUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white border border-[#C4C6CC]/70 text-[#006A62] hover:bg-[#DBF1FE] text-[11px] font-bold shrink-0 transition-colors"
+                        >
+                          <span>Swagger</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#E6F6FF] border border-[#CDE9FA] text-[#006A62] text-[10px] font-bold shrink-0">
+                          Gateway TLS
+                        </span>
+                      )}
                     </div>
                   ))}
                 </div>

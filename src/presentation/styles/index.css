@@ -23,3 +23,130 @@
     @apply outline-none ring-4 ring-hc-yellow ring-offset-4 ring-offset-hc-black;
   }
 }
+
+/* ============================================================================
+ * WCAG 2.2 Level AAA — High Visibility & Neuro-Visual Accessibility Mode
+ * ============================================================================
+ * Implements:
+ * - SC 1.4.4 Resize Text & Low-Vision Scaling: Root 19px (118.75%) so all Tailwind
+ *   rem-based utility classes (text-xs, text-sm, text-base, spacing) scale up.
+ * - SC 1.4.6 Contrast (Enhanced - AAA): >= 7:1 contrast ratio for normal text and
+ *   >= 4.5:1 for large text & UI boundaries (#071524 on white = 18.1:1,
+ *   #004D44 on #DCF8F2 = 8.4:1, #6F3200 on #FFF2E2 = 8.2:1).
+ * - SC 1.4.8 Visual Presentation (AAA) & SC 1.4.12 Text Spacing:
+ *   Line height >= 1.5, letter spacing >= 0.02em, word spacing >= 0.06em.
+ * - SC 2.4.11 / 2.4.13 Focus Appearance (AAA): High-contrast 3px solid outline
+ *   with 3px offset exceeding a 2px perimeter area and >= 4.5:1 contrast.
+ * - SC 2.5.5 / 2.5.8 Target Size (Enhanced): Minimum 44x44 CSS pixels for
+ *   interactive controls in the adapted patient interface.
+ * ============================================================================ */
+html.wcag-aaa-mode {
+  font-size: 118.75%; /* 19px base -> scales all rem utilities proportionally */
+}
+
+html.wcag-aaa-mode .wcag-patient-surface {
+  background-color: #FFFFFF !important;
+  color: #071524 !important;
+  line-height: 1.6 !important;
+  letter-spacing: 0.02em !important;
+  word-spacing: 0.06em !important;
+}
+
+/* Upgrade micro-text classes inside AAA patient view to readable >= 14.5px / 16px */
+html.wcag-aaa-mode .wcag-patient-surface .text-\[10px\],
+html.wcag-aaa-mode .wcag-patient-surface .text-\[11px\] {
+  font-size: 0.82rem !important;
+  line-height: 1.5 !important;
+  font-weight: 700 !important;
+}
+
+html.wcag-aaa-mode .wcag-patient-surface .text-xs {
+  font-size: 0.88rem !important;
+  line-height: 1.55 !important;
+}
+
+/* Enforce AAA >= 7:1 contrast on secondary/muted slate text and clinical labels */
+html.wcag-aaa-mode .wcag-patient-surface .text-\[\#455A64\],
+html.wcag-aaa-mode .wcag-patient-surface .text-\[\#1C2A39\] {
+  color: #071524 !important;
+}
+
+html.wcag-aaa-mode .wcag-patient-surface .text-\[\#0F6F62\],
+html.wcag-aaa-mode .wcag-patient-surface .text-\[\#26A69A\] {
+  color: #004D44 !important;
+}
+
+html.wcag-aaa-mode .wcag-patient-surface .text-\[\#B85D19\] {
+  color: #6F3200 !important;
+}
+
+/* High-visibility 2px borders on cards, panels, and inputs (SC 1.4.11 Non-text Contrast) */
+html.wcag-aaa-mode .wcag-patient-surface .border-\[\#DCEBF4\],
+html.wcag-aaa-mode .wcag-patient-surface .border-\[\#E2EEF5\],
+html.wcag-aaa-mode .wcag-patient-surface .border-\[\#CDE9FA\],
+html.wcag-aaa-mode .wcag-patient-surface .border-\[\#D5E5EF\],
+html.wcag-aaa-mode .wcag-patient-surface .border-\[\#E1F0FA\],
+html.wcag-aaa-mode .wcag-patient-surface .border-\[\#BDE0F3\] {
+  border-color: #071524 !important;
+  border-width: 2px !important;
+}
+
+/* Enforce SC 2.5.5 Target Size (minimum 44px height on interactive controls) */
+html.wcag-aaa-mode .wcag-patient-surface button,
+html.wcag-aaa-mode .wcag-patient-surface a,
+html.wcag-aaa-mode .wcag-patient-surface input,
+html.wcag-aaa-mode .wcag-patient-surface select {
+  min-height: 44px;
+}
+
+/* Enforce SC 2.4.13 Focus Appearance (AAA) with dual high-contrast ring */
+html.wcag-aaa-mode .wcag-patient-surface *:focus-visible,
+html.wcag-aaa-mode .wcag-patient-dark-surface *:focus-visible {
+  outline: 3px solid #071524 !important;
+  outline-offset: 3px !important;
+  box-shadow: 0 0 0 6px #FFFF00 !important;
+}
+
+/* ============================================================================
+ * Dark Clinical Surface (Post-Therapy Summary & Pause Overlay in Serious Games)
+ * Keeps dark anti-glare perimeter while enforcing WCAG 2.2 AAA typography,
+ * 44px target sizes (SC 2.5.5), text spacing (SC 1.4.12) & high-contrast borders
+ * ============================================================================ */
+html.wcag-aaa-mode .wcag-patient-dark-surface {
+  line-height: 1.6 !important;
+  letter-spacing: 0.02em !important;
+  word-spacing: 0.06em !important;
+}
+
+html.wcag-aaa-mode .wcag-patient-dark-surface .text-\[10px\],
+html.wcag-aaa-mode .wcag-patient-dark-surface .text-\[11px\] {
+  font-size: 0.82rem !important;
+  line-height: 1.5 !important;
+  font-weight: 700 !important;
+  color: #FFFFFF !important;
+}
+
+html.wcag-aaa-mode .wcag-patient-dark-surface .text-xs {
+  font-size: 0.88rem !important;
+  line-height: 1.55 !important;
+}
+
+html.wcag-aaa-mode .wcag-patient-dark-surface .text-slate-300,
+html.wcag-aaa-mode .wcag-patient-dark-surface .text-slate-200,
+html.wcag-aaa-mode .wcag-patient-dark-surface .text-white\/65,
+html.wcag-aaa-mode .wcag-patient-dark-surface .text-white\/75,
+html.wcag-aaa-mode .wcag-patient-dark-surface .text-white\/85 {
+  color: #FFFFFF !important;
+}
+
+html.wcag-aaa-mode .wcag-patient-dark-surface .border-white\/10,
+html.wcag-aaa-mode .wcag-patient-dark-surface .border-white\/15,
+html.wcag-aaa-mode .wcag-patient-dark-surface .border-white\/20 {
+  border-color: rgba(255, 255, 255, 0.85) !important;
+  border-width: 2px !important;
+}
+
+html.wcag-aaa-mode .wcag-patient-dark-surface button,
+html.wcag-aaa-mode .wcag-patient-dark-surface a {
+  min-height: 44px;
+}

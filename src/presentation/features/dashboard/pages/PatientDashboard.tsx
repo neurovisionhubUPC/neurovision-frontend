@@ -194,12 +194,13 @@ export const PatientDashboard: React.FC = () => {
     setPrescription,
     setGamePhase,
     setHasCompletedOnboarding,
+    highVisibilityMode,
+    toggleHighVisibilityMode,
     logout,
   } = useAppStore();
 
   const isCognitoMode = authMode === 'COGNITO' && Boolean(accessToken);
 
-  const [highContrast, setHighContrast] = useState(false);
   const [activeTab, setActiveTab] = useState<'inicio' | 'ejercicios' | 'progreso'>('inicio');
   const [isResting, setIsResting] = useState(false);
   const [restSeconds, setRestSeconds] = useState(120);
@@ -676,8 +677,8 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
 
   return (
     <div
-      className={`min-h-screen bg-[#F3FAFF] font-sans text-[#1C2A39] flex flex-col justify-between ${
-        highContrast ? 'text-lg' : ''
+      className={`wcag-patient-surface min-h-screen bg-[#F3FAFF] font-sans text-[#1C2A39] flex flex-col justify-between transition-colors ${
+        highVisibilityMode ? 'wcag-aaa-surface' : ''
       }`}
     >
       {/* Top Navbar */}
@@ -827,23 +828,61 @@ Motivo de Alerta: Síntomas de fatiga visual / mareo / cefalea en curso.`;
             </div>
           </div>
 
-          {/* Accessibility pill */}
-          <div className="bg-[#EBF7FD] border border-[#CDE9FA] rounded-xl p-3 flex items-center space-x-4 shrink-0">
+          {/* Accessibility pill (WCAG 2.2 AAA High Visibility Mode) */}
+          <div
+            role="region"
+            aria-label="Control de accesibilidad visual WCAG 2.2 AAA"
+            className={`rounded-xl p-3.5 flex items-center space-x-4 shrink-0 transition-all ${
+              highVisibilityMode
+                ? 'bg-[#071524] border-2 border-[#071524] text-white shadow-md'
+                : 'bg-[#EBF7FD] border border-[#CDE9FA] text-[#1C2A39]'
+            }`}
+          >
             <div className="flex items-start space-x-2.5">
-              <div className="p-1.5 rounded-md bg-white text-[#1C2A39] shadow-2xs">
+              <div
+                className={`p-1.5 rounded-md shadow-2xs ${
+                  highVisibilityMode
+                    ? 'bg-[#FFFF00] text-[#071524] font-extrabold'
+                    : 'bg-white text-[#1C2A39]'
+                }`}
+              >
                 <Type size={18} />
               </div>
               <div className="leading-tight">
-                <p className="text-xs font-bold text-[#1C2A39]">Texto de Alta Visibilidad</p>
-                <p className="text-[10px] text-[#455A64]">WCAG 2.2 AAA Activo</p>
+                <p
+                  className={`text-xs font-bold ${
+                    highVisibilityMode ? 'text-white' : 'text-[#1C2A39]'
+                  }`}
+                >
+                  Texto de Alta Visibilidad
+                </p>
+                <p
+                  className={`text-[10px] font-semibold ${
+                    highVisibilityMode ? 'text-[#A7F3D0]' : 'text-[#455A64]'
+                  }`}
+                >
+                  {highVisibilityMode
+                    ? 'WCAG 2.2 AAA Activo (7:1+ · 44px · +19%)'
+                    : 'WCAG 2.2 AAA · Escala y Contraste'}
+                </p>
               </div>
             </div>
             <button
               type="button"
-              onClick={() => setHighContrast(!highContrast)}
-              className="bg-white hover:bg-neutral-50 text-[#1C2A39] border border-[#BDE0F3] px-3 py-1.5 rounded-lg text-xs font-bold shadow-2xs transition-all active:scale-95"
+              aria-pressed={highVisibilityMode}
+              onClick={toggleHighVisibilityMode}
+              title={
+                highVisibilityMode
+                  ? 'Restaurar vista estándar (Desactivar modo WCAG 2.2 AAA)'
+                  : 'Activar modo de alta visibilidad WCAG 2.2 AAA (contraste >= 7:1, escala tipográfica +19%, espaciado SC 1.4.12 y áreas táctiles >= 44px)'
+              }
+              className={`px-3.5 py-2 rounded-lg text-xs font-extrabold shadow-2xs transition-all active:scale-95 cursor-pointer ${
+                highVisibilityMode
+                  ? 'bg-[#FFFF00] hover:bg-[#FDE047] text-[#071524] border-2 border-white'
+                  : 'bg-white hover:bg-neutral-50 text-[#1C2A39] border border-[#BDE0F3]'
+              }`}
             >
-              {highContrast ? 'Normal -' : 'Aumentar +'}
+              {highVisibilityMode ? 'Normal −' : 'Aumentar +'}
             </button>
           </div>
         </div>

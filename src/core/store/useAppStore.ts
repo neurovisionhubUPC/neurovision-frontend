@@ -49,6 +49,7 @@ interface AppState {
   currentPrescription: MedicalPrescription | null;
   gamePhase: GamePhase;
   patients: Patient[];
+  highVisibilityMode: boolean;
 
   login: (role: UserRole, options?: LoginOptions) => void;
   logout: () => void;
@@ -65,6 +66,8 @@ interface AppState {
   setPatients: (patients: Patient[]) => void;
   addPatient: (patient: Patient) => void;
   updatePatient: (patient: Patient) => void;
+  setHighVisibilityMode: (enabled: boolean) => void;
+  toggleHighVisibilityMode: () => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -82,6 +85,7 @@ export const useAppStore = create<AppState>()(
       currentPrescription: null,
       gamePhase: 'IDLE',
       patients: INITIAL_MOCK_PATIENTS,
+      highVisibilityMode: false,
 
       login: (role, options) =>
         set((state) => ({
@@ -121,6 +125,9 @@ export const useAppStore = create<AppState>()(
         set((state) => ({
           patients: state.patients.map((p) => (p.id === updated.id ? updated : p)),
         })),
+      setHighVisibilityMode: (enabled) => set({ highVisibilityMode: enabled }),
+      toggleHighVisibilityMode: () =>
+        set((state) => ({ highVisibilityMode: !state.highVisibilityMode })),
     }),
     {
       name: 'app-storage',

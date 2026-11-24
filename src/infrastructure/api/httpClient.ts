@@ -1,12 +1,45 @@
 export type BackendServiceName = 'iam' | 'profile' | 'clinical' | 'telemetry' | 'analytics';
 
+export const DEFAULT_DEPLOY_GATEWAY_URL = 'https://api-neurovision.fzcards.com';
+
+function stripTrailingSlash(url: string): string {
+  return url.trim().replace(/\/+$/, '');
+}
+
+export function isLocalDevelopmentHost(): boolean {
+  if (typeof window === 'undefined' || !window.location) {
+    return true;
+  }
+  const host = window.location.hostname;
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
+function resolveEnvBaseUrl(serviceEnvValue: string | undefined): string {
+  if (serviceEnvValue && serviceEnvValue.trim()) {
+    return stripTrailingSlash(serviceEnvValue);
+  }
+  const sharedEnv =
+    import.meta.env?.VITE_API_BASE_URL || import.meta.env?.VITE_API_URL || '';
+  if (sharedEnv && sharedEnv.trim()) {
+    return stripTrailingSlash(sharedEnv);
+  }
+  if (!isLocalDevelopmentHost()) {
+    return DEFAULT_DEPLOY_GATEWAY_URL;
+  }
+  return '';
+}
+
 const SERVICE_BASE_URLS: Record<BackendServiceName, string> = {
-  iam: import.meta.env?.VITE_IAM_API_URL || '',
-  profile: import.meta.env?.VITE_PROFILE_API_URL || '',
-  clinical: import.meta.env?.VITE_CLINICAL_API_URL || '',
-  telemetry: import.meta.env?.VITE_TELEMETRY_API_URL || '',
-  analytics: import.meta.env?.VITE_ANALYTICS_API_URL || '',
+  iam: resolveEnvBaseUrl(import.meta.env?.VITE_IAM_API_URL),
+  profile: resolveEnvBaseUrl(import.meta.env?.VITE_PROFILE_API_URL),
+  clinical: resolveEnvBaseUrl(import.meta.env?.VITE_CLINICAL_API_URL),
+  telemetry: resolveEnvBaseUrl(import.meta.env?.VITE_TELEMETRY_API_URL),
+  analytics: resolveEnvBaseUrl(import.meta.env?.VITE_ANALYTICS_API_URL),
 };
+
+export function getServiceBaseUrl(service: BackendServiceName): string {
+  return SERVICE_BASE_URLS[service];
+}
 
 let tokenGetter: () => string | null = () => null;
 let tokenRefresher: (() => Promise<string | null>) | null = null;
@@ -14,6 +47,10 @@ let tokenNeedsRefreshChecker: ((token: string | null) => boolean) | null = null;
 
 export function registerAccessTokenGetter(getter: () => string | null): void {
   tokenGetter = getter;
+}
+
+export function getRegisteredAccessToken(): string | null {
+  return tokenGetter();
 }
 
 export function registerAccessTokenRefresher(

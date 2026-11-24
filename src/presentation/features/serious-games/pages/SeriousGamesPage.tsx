@@ -4,11 +4,16 @@ import {
   Activity,
   ArrowLeft,
   CheckCircle2,
+  Eye,
+  EyeOff,
   Loader2,
+  Maximize2,
+  Minimize2,
   MousePointer2,
   Play,
   RefreshCw,
   ShieldAlert,
+  Type,
 } from 'lucide-react';
 import { useWebcam } from '../../../../infrastructure/cv/hooks/useWebcam';
 import { useMediaPipeWorker } from '../../../../infrastructure/cv/hooks/useMediaPipeWorker';
@@ -212,6 +217,8 @@ export const SeriousGamesPage: React.FC = () => {
   const setPrescription = useAppStore((state) => state.setPrescription);
   const gamePhase = useAppStore((state) => state.gamePhase);
   const setGamePhase = useAppStore((state) => state.setGamePhase);
+  const highVisibilityMode = useAppStore((state) => state.highVisibilityMode);
+  const toggleHighVisibilityMode = useAppStore((state) => state.toggleHighVisibilityMode);
 
   const isCognitoMode = authMode === 'COGNITO' && Boolean(accessToken);
   const accountKey = useMemo(() => {
@@ -246,6 +253,37 @@ export const SeriousGamesPage: React.FC = () => {
     mouseFallbackEnabledRef.current = mouseFallbackEnabled;
   }, [mouseFallbackEnabled]);
   const [expiredSession, setExpiredSession] = useState<PatientTherapySessionResponse | null>(null);
+  const [showStageCorners, setShowStageCorners] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [stageDimensions] = useState(() => {
+    if (typeof window === 'undefined') {
+      return { width: 1536, height: 820 };
+    }
+    return {
+      width: Math.max(1024, Math.round(window.innerWidth)),
+      height: Math.max(576, Math.round(window.innerHeight - 44)),
+    };
+  });
+
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+  }, []);
+
+  const handleToggleFullscreen = useCallback(async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch {
+      // Ignore if browser blocks programmatic fullscreen
+    }
+  }, []);
 
   const prevAccountKeyRef = useRef<string | null>(accountKey);
   const prevActiveSessionIdRef = useRef<string | null>(
@@ -760,8 +798,8 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
     <div
       className={
         isPreCalibrating
-          ? 'min-h-screen bg-[#F3FAFF] text-[#1C2A39] p-6 lg:p-10 flex flex-col items-center justify-center relative transition-colors duration-300 font-sans'
-          : 'h-[100dvh] overflow-hidden bg-[#000000] text-white px-3 py-2.5 sm:px-5 sm:py-3 lg:px-6 flex flex-col items-center justify-between gap-2 relative transition-colors duration-300 font-sans'
+          ? 'wcag-patient-surface min-h-screen bg-[#F3FAFF] text-[#1C2A39] p-6 lg:p-10 flex flex-col items-center justify-center relative transition-colors duration-300 font-sans'
+          : 'h-[100dvh] w-screen overflow-hidden bg-[#000000] text-white flex flex-col relative transition-colors duration-300 font-sans'
       }
     >
       {/* VISTA 1: PRE-CALIBRACIÓN + PANEL DE SESIÓN CLÍNICA Y MODOS */}
@@ -788,7 +826,21 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
                 </div>
               </div>
 
-              <div className="flex items-center space-x-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  aria-pressed={highVisibilityMode}
+                  onClick={toggleHighVisibilityMode}
+                  title="Alternar modo de alta visibilidad WCAG 2.2 AAA (contraste >= 7:1, escala +19% y áreas >= 44px)"
+                  className={`inline-flex items-center space-x-1.5 px-3 py-2 rounded-xl border text-xs font-extrabold transition-all cursor-pointer ${
+                    highVisibilityMode
+                      ? 'bg-[#FFFF00] text-[#071524] border-2 border-[#071524] shadow-xs'
+                      : 'bg-[#EBF7FD] text-[#1C2A39] border-[#CDE9FA] hover:bg-[#DCEFF9]'
+                  }`}
+                >
+                  <Type size={14} />
+                  <span>{highVisibilityMode ? 'WCAG AAA: Activo' : 'WCAG AAA +'}</span>
+                </button>
                 {isCognitoMode && (
                   <button
                     onClick={() => void loadClinicalSessionAndPlans()}
@@ -994,79 +1046,12 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
           )}
         </div>
       ) : (
-        /* VISTA 2: CALIBRACIÓN DE 9 PUNTOS / JUEGO ACTIVO */
+        /* VISTA 2: CALIBRACIÓN DE 9 PUNTOS / JUEGO ACTIVO EN PANTALLA COMPLETA (100% VIEWPORT) */
         <>
-          {/* HUD Superior */}
-          <div className="w-full max-w-[1520px] shrink-0 flex flex-wrap justify-between items-center gap-2 text-white/90 z-40">
-            <div className="flex flex-wrap items-center gap-2.5">
-              <button
-                onClick={() => {
-                  if (isCognitoMode && pendingCriticalWork?.hasPendingCriticalWork) {
-                    setConfirmExitWithPending(true);
-                  } else {
-                    navigate('/patient/dashboard');
-                  }
-                }}
-                className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold text-white border border-white/15 transition-all"
-              >
-                <ArrowLeft size={14} />
-                <span>Panel</span>
-              </button>
-              <h2 className="text-base sm:text-lg font-bold tracking-tight text-[#26A69A]">
-                NeuroVisión Terapia
-              </h2>
-              <span className="text-xs bg-white/10 border border-white/15 px-2.5 py-1 rounded-full font-semibold text-[#8AE2D6]">
-                {activeModeMeta.label}
-              </span>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              {renderProgressPill()}
-
-              {!isCognitoMode && gamePhase !== 'CALIBRATION' && (
-                <select
-                  value={selectedMode}
-                  onChange={(e) => setSelectedMode(e.target.value as ReportMode)}
-                  className="bg-[#132230] border border-white/20 text-white text-xs font-semibold rounded-xl px-3 py-1.5 focus:outline-none focus:border-[#26A69A]"
-                >
-                  {ALL_GAME_MODES.map((m) => (
-                    <option key={m.mode} value={m.mode}>
-                      {m.label}
-                    </option>
-                  ))}
-                </select>
-              )}
-
-              <button
-                type="button"
-                onClick={() => setMouseFallbackEnabled((prev) => !prev)}
-                className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
-                  mouseFallbackEnabled
-                    ? 'bg-[#26A69A] text-[#0E1722] border-[#26A69A]'
-                    : 'bg-white/10 text-white/80 border-white/15 hover:bg-white/20'
-                }`}
-              >
-                <MousePointer2 size={13} />
-                <span>{mouseFallbackEnabled ? 'Ratón ON' : 'Ratón OFF'}</span>
-              </button>
-
-              {!isLoaded && (
-                <span className="text-xs bg-white/10 px-3 py-1 rounded-full animate-pulse">
-                  Cargando Motores de IA...
-                </span>
-              )}
-              {error && (
-                <span className="text-xs bg-red-900/60 text-red-200 px-3 py-1 rounded-full">
-                  {error}
-                </span>
-              )}
-            </div>
-          </div>
-
           {confirmExitWithPending &&
             isCognitoMode &&
             pendingCriticalWork?.hasPendingCriticalWork && (
-              <div className="w-full max-w-[1520px] shrink-0 bg-amber-950/90 border border-amber-400/50 rounded-xl px-3.5 py-2.5 text-xs text-amber-100 flex flex-wrap items-center justify-between gap-2 z-50">
+              <div className="w-full shrink-0 bg-amber-950/95 border-b border-amber-400/50 px-3.5 py-2 text-xs text-amber-100 flex flex-wrap items-center justify-between gap-2 z-50">
                 <div className="space-y-0.5">
                   <div className="font-bold text-amber-300">
                     Hay trabajo clínico pendiente en memoria sin confirmar
@@ -1089,7 +1074,7 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
                   <button
                     type="button"
                     onClick={() => setConfirmExitWithPending(false)}
-                    className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-semibold cursor-pointer"
+                    className="px-3 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white font-semibold cursor-pointer"
                   >
                     Cancelar
                   </button>
@@ -1099,7 +1084,7 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
                       setConfirmExitWithPending(false);
                       navigate('/patient/dashboard');
                     }}
-                    className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-[#071524] font-bold cursor-pointer"
+                    className="px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-[#071524] font-bold cursor-pointer"
                   >
                     Descartar pendientes y salir
                   </button>
@@ -1125,61 +1110,155 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
             </>
           )}
 
-          {/* Motor Gráfico del Juego (Serious Games) - Viewport-fitted without dock overlap */}
-          <div className="flex-1 min-h-0 w-full flex items-center justify-center overflow-hidden">
-            <div className="w-full max-w-[min(100%,calc((100dvh-260px)*16/9),1520px)] relative">
-              <EyeTrackingGameCanvas
-                gazeRef={gazeRef}
-                prescription={effectivePrescription}
-                gamePhase={gamePhase}
-                onPhaseChange={setGamePhase}
-                exerciseMode={selectedMode}
-                activeSession={activeClinicalSession}
-                sessionProgress={sessionProgress}
-                accountKey={accountKey}
-                gazeConfidenceRef={gazeConfidenceRef}
-                gazeSampleSeqRef={gazeSampleSeqRef}
-                gazeLastValidPerfRef={lastValidGazePerfRef}
-                gazeIsBlinkingRef={gazeIsBlinkingRef}
-                isWebcamStreaming={isStreaming}
-                mouseFallbackEnabled={mouseFallbackEnabled}
-                measuredInferenceFps={inferenceRateSnap.measuredFps}
-                onToggleMouseFallback={() => setMouseFallbackEnabled((prev) => !prev)}
-                onSessionProgressUpdate={setSessionProgress}
-                onSessionCompleted={handleSessionCompleted}
-                onRequestNewSession={handleRequestNewSession}
-                onPendingCriticalWorkChange={setPendingCriticalWork}
-                width={1024}
-                height={576}
-              />
-            </div>
-          </div>
+          {/* Motor Gráfico del Juego (Serious Games) - 100% Full-Viewport con HUD y PIP integrados */}
+          <div className="flex-1 min-h-0 w-full h-full flex overflow-hidden">
+            <EyeTrackingGameCanvas
+              gazeRef={gazeRef}
+              prescription={effectivePrescription}
+              gamePhase={gamePhase}
+              onPhaseChange={setGamePhase}
+              exerciseMode={selectedMode}
+              activeSession={activeClinicalSession}
+              sessionProgress={sessionProgress}
+              accountKey={accountKey}
+              gazeConfidenceRef={gazeConfidenceRef}
+              gazeSampleSeqRef={gazeSampleSeqRef}
+              gazeLastValidPerfRef={lastValidGazePerfRef}
+              gazeIsBlinkingRef={gazeIsBlinkingRef}
+              isWebcamStreaming={isStreaming}
+              mouseFallbackEnabled={mouseFallbackEnabled}
+              measuredInferenceFps={inferenceRateSnap.measuredFps}
+              onToggleMouseFallback={() => {
+                setMouseFallbackEnabled((prev) => {
+                  const next = !prev;
+                  if (next && gamePhase === 'CALIBRATION') {
+                    setGamePhase('MAIN_GAME');
+                  }
+                  return next;
+                });
+              }}
+              onSessionProgressUpdate={setSessionProgress}
+              onSessionCompleted={handleSessionCompleted}
+              onRequestNewSession={handleRequestNewSession}
+              onPendingCriticalWorkChange={setPendingCriticalWork}
+              onExitToDashboard={() => {
+                if (isCognitoMode && pendingCriticalWork?.hasPendingCriticalWork) {
+                  setConfirmExitWithPending(true);
+                } else {
+                  navigate('/patient/dashboard');
+                }
+              }}
+              headerProgressNode={
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="hidden lg:inline-block text-[11px] bg-white/10 border border-white/15 px-2 py-0.5 rounded-md font-semibold text-[#8AE2D6]">
+                    {activeModeMeta.label}
+                  </span>
+                  {renderProgressPill()}
+                  {!isCognitoMode && gamePhase !== 'CALIBRATION' && (
+                    <select
+                      value={selectedMode}
+                      onChange={(e) => setSelectedMode(e.target.value as ReportMode)}
+                      className="bg-[#132230] border border-white/20 text-white text-xs font-semibold rounded-lg px-2 py-1 focus:outline-none focus:border-[#26A69A]"
+                    >
+                      {ALL_GAME_MODES.map((m) => (
+                        <option key={m.mode} value={m.mode}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {!isLoaded && (
+                    <span className="text-[11px] bg-white/10 px-2 py-0.5 rounded-full animate-pulse">
+                      IA...
+                    </span>
+                  )}
+                  {error && (
+                    <span className="text-[11px] bg-red-900/60 text-red-200 px-2 py-0.5 rounded-full">
+                      {error}
+                    </span>
+                  )}
+                </div>
+              }
+              headerExtraControlsNode={
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setShowStageCorners((prev) => !prev)}
+                    title={
+                      showStageCorners
+                        ? 'Ocultar cámara PIP y telemetría flotante'
+                        : 'Mostrar cámara PIP y telemetría flotante'
+                    }
+                    className={`px-2 py-1 text-xs font-semibold rounded-lg flex items-center space-x-1 border transition-colors cursor-pointer ${
+                      showStageCorners
+                        ? 'bg-white/15 text-white border-white/20 hover:bg-white/25'
+                        : 'bg-white/5 text-white/60 border-white/10 hover:bg-white/15'
+                    }`}
+                  >
+                    {showStageCorners ? <Eye size={13} /> : <EyeOff size={13} />}
+                    <span className="hidden xl:inline">PIP</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleToggleFullscreen()}
+                    title={
+                      isFullscreen
+                        ? 'Salir de pantalla completa (Esc)'
+                        : 'Maximizar a pantalla completa real para mayor ángulo visual'
+                    }
+                    className={`px-2 py-1 text-xs font-semibold rounded-lg flex items-center space-x-1 border transition-colors cursor-pointer ${
+                      isFullscreen
+                        ? 'bg-[#26A69A]/25 text-[#8AE2D6] border-[#26A69A]/50'
+                        : 'bg-white/10 text-white border-white/15 hover:bg-white/20'
+                    }`}
+                  >
+                    {isFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                    <span className="hidden xl:inline">
+                      {isFullscreen ? 'Ventana' : 'Pantalla Completa'}
+                    </span>
+                  </button>
+                </>
+              }
+              stageOverlayNode={
+                <>
+                  {/* Telemetría Flotante Inferior Izquierda (Integrada dentro del lienzo) */}
+                  <div
+                    className={`absolute bottom-2.5 left-2.5 z-20 bg-[#0B131C]/75 backdrop-blur-xs border border-white/10 text-[#8AE2D6] px-2.5 py-1.5 rounded-xl font-mono text-[10px] shadow-lg max-w-xs sm:max-w-sm max-h-[76px] overflow-hidden pointer-events-none transition-opacity duration-200 ${
+                      showStageCorners ? 'opacity-85' : 'opacity-0'
+                    }`}
+                  >
+                    <pre ref={debugRef} className="m-0 leading-tight whitespace-pre-wrap">
+                      {mouseFallbackEnabled
+                        ? 'Modo cursor ratón activo para seguimiento de prueba.'
+                        : 'Iniciando telemetría...'}
+                    </pre>
+                  </div>
 
-          {/* Dock Inferior Dedicado: Telemetría izquierda + PIP Cámara derecha (sin solapar el canvas) */}
-          <div className="w-full max-w-[1520px] shrink-0 flex items-end justify-between gap-3 z-30">
-            <div className="bg-[#0B131C]/90 border border-white/10 text-[#8AE2D6] px-3 py-2 rounded-xl font-mono text-[11px] shadow-xl max-w-md max-h-[84px] overflow-hidden pointer-events-none">
-              <pre ref={debugRef} className="m-0 leading-tight whitespace-pre-wrap">
-                {mouseFallbackEnabled
-                  ? 'Modo cursor ratón activo para seguimiento de prueba.'
-                  : 'Iniciando telemetría...'}
-              </pre>
-            </div>
-
-            <div className="relative shrink-0 w-28 h-[84px] sm:w-32 sm:h-24 rounded-xl overflow-hidden shadow-2xl border border-white/20 bg-black">
-              <video
-                ref={attachVideoElement}
-                className="w-full h-full object-cover -scale-x-100 opacity-90"
-                playsInline
-                muted
-                autoPlay
-              />
-              <canvas
-                ref={pipCanvasRef}
-                width={192}
-                height={144}
-                className="absolute inset-0 w-full h-full -scale-x-100 pointer-events-none"
-              />
-            </div>
+                  {/* PIP Cámara Flotante Inferior Derecha (Siempre montada en DOM para MediaPipe) */}
+                  <div
+                    className={`absolute bottom-2.5 right-2.5 z-20 w-24 h-[68px] sm:w-28 sm:h-20 rounded-xl overflow-hidden shadow-xl border border-white/20 bg-black/80 pointer-events-none transition-opacity duration-200 ${
+                      showStageCorners ? 'opacity-80' : 'opacity-0'
+                    }`}
+                  >
+                    <video
+                      ref={attachVideoElement}
+                      className="w-full h-full object-cover -scale-x-100 opacity-90"
+                      playsInline
+                      muted
+                      autoPlay
+                    />
+                    <canvas
+                      ref={pipCanvasRef}
+                      width={192}
+                      height={144}
+                      className="absolute inset-0 w-full h-full -scale-x-100 pointer-events-none"
+                    />
+                  </div>
+                </>
+              }
+              width={stageDimensions.width}
+              height={stageDimensions.height}
+            />
           </div>
         </>
       )}

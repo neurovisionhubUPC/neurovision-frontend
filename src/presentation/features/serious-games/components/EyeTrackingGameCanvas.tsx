@@ -128,6 +128,10 @@ export interface EyeTrackingGameCanvasProps {
   ) => void;
   onRequestNewSession?: () => void;
   onPendingCriticalWorkChange?: (snapshot: PendingCriticalWorkSnapshot) => void;
+  onExitToDashboard?: () => void;
+  headerProgressNode?: React.ReactNode;
+  headerExtraControlsNode?: React.ReactNode;
+  stageOverlayNode?: React.ReactNode;
 }
 
 type TrialSubPhase = 'INTER_STIMULUS_REST' | 'CENTRAL_ANCHOR' | 'ACTIVE_TRIAL';
@@ -348,6 +352,10 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   onSessionCompleted,
   onRequestNewSession,
   onPendingCriticalWorkChange,
+  onExitToDashboard,
+  headerProgressNode,
+  headerExtraControlsNode,
+  stageOverlayNode,
 }) => {
   const navigate = useNavigate();
   const authMode = useAppStore((state) => state.authMode);
@@ -1584,7 +1592,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
         id: `tut-${idx}`,
         x: point.x * width,
         y: point.y * height,
-        radius: 50,
+        radius: 28,
         kind: 'TARGET',
         found: false,
         dwellTimeMs: 0,
@@ -3062,81 +3070,102 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
   };
 
   return (
-    <div className="flex flex-col rounded-2xl overflow-hidden border-2 border-white/15 shadow-2xl transition-all bg-[#070B12] w-full">
-      {/* Slim dedicated HUD bar above Canvas (prevents overlapping targets & action buttons) */}
-      <div className="bg-[#0B131C] border-b border-white/10 px-3.5 py-2 flex flex-wrap items-center justify-between gap-2 min-h-[48px]">
-        <div className="min-w-0 flex-1 flex flex-col gap-0.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              ref={hudPrimaryRef}
-              className="text-xs sm:text-sm font-bold text-white tracking-tight truncate"
+    <div className="flex flex-col w-full h-full overflow-hidden bg-[#070B12] relative">
+      {/* Unified Slim Top HUD Bar Inside Full-Viewport Stage */}
+      <div className="bg-[#0B131C]/95 border-b border-white/10 px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 min-h-[44px] shrink-0 z-[60]">
+        <div className="min-w-0 flex-1 flex items-center gap-2.5">
+          {onExitToDashboard && (
+            <button
+              type="button"
+              onClick={onExitToDashboard}
+              className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-bold text-white border border-white/15 shrink-0 transition-all cursor-pointer"
             >
-              {gamePhase === 'CALIBRATION'
-                ? 'Calibración ocular de 9 puntos'
-                : 'Preparando ejercicio...'}
-            </span>
+              <ArrowLeft size={13} />
+              <span>Panel</span>
+            </button>
+          )}
+          <div className="min-w-0 flex-1 flex flex-col sm:flex-row sm:items-center gap-0.5 sm:gap-2.5">
+            <div className="flex flex-wrap items-center gap-2 min-w-0">
+              <span
+                ref={hudPrimaryRef}
+                className="text-xs sm:text-sm font-bold text-white tracking-tight truncate"
+              >
+                {gamePhase === 'CALIBRATION'
+                  ? 'Calibración ocular de 9 puntos'
+                  : 'Preparando ejercicio...'}
+              </span>
+              <span
+                ref={hudWarningRef}
+                style={{ display: 'none' }}
+                className="items-center px-2 py-0.5 rounded-md bg-amber-500/20 border border-amber-400/40 text-amber-300 text-[11px] font-bold"
+              />
+            </div>
             <span
-              ref={hudWarningRef}
-              style={{ display: 'none' }}
-              className="items-center px-2 py-0.5 rounded-md bg-amber-500/20 border border-amber-400/40 text-amber-300 text-[11px] font-bold"
+              ref={hudSecondaryRef}
+              className="text-[11px] font-mono text-[#8AE2D6] truncate"
             />
           </div>
-          <span
-            ref={hudSecondaryRef}
-            className="text-[11px] font-mono text-[#8AE2D6] truncate"
-          />
         </div>
 
-        {/* Action Controls during MAIN_GAME */}
-        {gamePhase === 'MAIN_GAME' && (
-          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 shrink-0">
-            <button
-              onClick={handleToggleMute}
-              title={isMuted ? 'Activar retroalimentación sonora espacial' : 'Silenciar audio'}
-              className={`px-2.5 py-1.5 text-xs font-bold rounded-lg flex items-center space-x-1.5 transition-colors cursor-pointer ${
-                !isMuted
-                  ? 'bg-[#26A69A]/25 border border-[#26A69A]/50 text-[#8AE2D6]'
-                  : 'bg-white/15 hover:bg-white/25 text-white/70'
-              }`}
-            >
-              {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
-              <span className="hidden sm:inline">{isMuted ? 'Audio OFF' : 'Audio 3D'}</span>
-            </button>
+        {/* Integrated Session Progress & Action Controls (Mouse button always visible across all phases) */}
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 shrink-0">
+          {headerProgressNode}
 
-            {!onToggleMouseFallback && (
+          <button
+            type="button"
+            onClick={handleToggleMouse}
+            title="Activar o desactivar seguimiento por ratón (Modo Contingencia / Prueba)"
+            className={`px-2.5 py-1 text-xs font-bold rounded-lg flex items-center space-x-1 border transition-colors cursor-pointer ${
+              localMouseFallback
+                ? 'bg-[#26A69A] text-[#0E1722] border-[#26A69A]'
+                : 'bg-white/10 hover:bg-white/20 text-white border-white/15'
+            }`}
+          >
+            <MousePointer2 size={13} />
+            <span>{localMouseFallback ? 'Ratón ON' : 'Ratón OFF'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleToggleMute}
+            title={isMuted ? 'Activar retroalimentación sonora espacial' : 'Silenciar audio'}
+            className={`px-2.5 py-1 text-xs font-bold rounded-lg flex items-center space-x-1 transition-colors cursor-pointer ${
+              !isMuted
+                ? 'bg-[#26A69A]/25 border border-[#26A69A]/50 text-[#8AE2D6]'
+                : 'bg-white/15 hover:bg-white/25 text-white/70'
+            }`}
+          >
+            {isMuted ? <VolumeX size={13} /> : <Volume2 size={13} />}
+            <span className="hidden md:inline">{isMuted ? 'Audio OFF' : 'Audio 3D'}</span>
+          </button>
+
+          {headerExtraControlsNode}
+
+          {gamePhase === 'MAIN_GAME' && (
+            <>
               <button
-                onClick={handleToggleMouse}
-                className={`px-2.5 py-1.5 text-xs font-bold rounded-lg flex items-center space-x-1.5 transition-colors cursor-pointer ${
-                  localMouseFallback
-                    ? 'bg-[#26A69A] text-[#0E1722]'
-                    : 'bg-white/15 hover:bg-white/25 text-white'
-                }`}
+                type="button"
+                onClick={handleTogglePause}
+                className="px-2.5 py-1 bg-white/15 hover:bg-white/25 text-white text-xs font-semibold rounded-lg flex items-center space-x-1 transition-colors cursor-pointer"
               >
-                <MousePointer2 size={14} />
-                <span>{localMouseFallback ? 'Ratón ON' : 'Ratón'}</span>
+                {isPaused ? <Play size={13} /> : <Pause size={13} />}
+                <span>{isPaused ? 'Reanudar' : 'Pausar'}</span>
               </button>
-            )}
 
-            <button
-              onClick={handleTogglePause}
-              className="px-3 py-1.5 bg-white/15 hover:bg-white/25 text-white text-xs font-semibold rounded-lg flex items-center space-x-1.5 transition-colors cursor-pointer"
-            >
-              {isPaused ? <Play size={14} /> : <Pause size={14} />}
-              <span>{isPaused ? 'Reanudar' : 'Pausar'}</span>
-            </button>
-
-            <button
-              onClick={() => void finishSession('USER_EXIT')}
-              className="px-3 py-1.5 bg-[#B85D19] hover:bg-[#974911] text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer"
-            >
-              Finalizar Ejercicio
-            </button>
-          </div>
-        )}
+              <button
+                type="button"
+                onClick={() => void finishSession('USER_EXIT')}
+                className="px-2.5 py-1 bg-[#B85D19] hover:bg-[#974911] text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+              >
+                Finalizar
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
-      {/* Unobstructed 16:9 Canvas Stage */}
-      <div className="relative w-full aspect-video bg-hc-black">
+      {/* Full-Viewport Unobstructed Canvas Stage (1:1 aligned with 9-point full-screen calibration) */}
+      <div className="relative flex-1 min-h-0 w-full h-full bg-hc-black overflow-hidden">
         <canvas
           ref={canvasRef}
           width={width}
@@ -3146,9 +3175,12 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
           style={{ touchAction: 'none', cursor: localMouseFallback ? 'crosshair' : 'default' }}
         />
 
+        {/* Floating corner overlays (Telemetry & Webcam PIP inside stage) */}
+        {stageOverlayNode}
+
         {/* Non-blocking backend warning badge */}
         {backendWarning && gamePhase === 'MAIN_GAME' && (
-          <div className="absolute bottom-3 left-3 right-3 sm:right-auto max-w-md bg-amber-950/90 border border-amber-500/40 text-amber-200 px-3 py-1.5 rounded-lg text-[11px] flex items-center space-x-2 z-20">
+          <div className="absolute bottom-24 left-3 right-3 sm:right-auto max-w-md bg-amber-950/90 border border-amber-500/40 text-amber-200 px-3 py-1.5 rounded-lg text-[11px] flex items-center space-x-2 z-20 pointer-events-none">
             <AlertTriangle size={14} className="shrink-0 text-amber-400" />
             <span className="truncate">{backendWarning}</span>
           </div>
@@ -3156,7 +3188,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
 
         {/* Pause Overlay */}
         {gamePhase === 'MAIN_GAME' && isPaused && (
-          <div className="absolute inset-0 bg-black/75 backdrop-blur-xs flex flex-col items-center justify-center z-20 space-y-4">
+          <div className="wcag-patient-dark-surface absolute inset-0 bg-black/80 backdrop-blur-xs flex flex-col items-center justify-center z-20 space-y-4">
             <h3 className="text-2xl font-bold text-white">Sesión en Pausa</h3>
             <p className="text-sm text-white/75">
               Descansa tus ojos un momento. Pulsa reanudar cuando estés listo.
@@ -3174,7 +3206,7 @@ export const EyeTrackingGameCanvas: React.FC<EyeTrackingGameCanvasProps> = ({
 
       {/* Finished / Clinical Report Overlay */}
       {gamePhase === 'FINISHED' && report && (
-        <div className="fixed inset-0 bg-primary/95 text-white flex items-start justify-center p-4 sm:p-6 z-[80] overflow-y-auto">
+        <div className="wcag-patient-dark-surface fixed inset-0 bg-primary/95 text-white flex items-start justify-center p-4 sm:p-6 z-[80] overflow-y-auto">
           <div className="bg-bgSecondary/10 border border-white/20 rounded-2xl p-6 sm:p-8 max-w-2xl w-full my-auto text-center shadow-2xl backdrop-blur-sm space-y-5">
             <div className="flex justify-center">
               <Award className="text-secondary w-14 h-14" />
