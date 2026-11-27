@@ -1057,7 +1057,11 @@ Gaze X: ${predictedGaze.x.toFixed(3)} | Y: ${predictedGaze.y.toFixed(3)}`;
                     Hay trabajo clínico pendiente en memoria sin confirmar
                   </div>
                   <p className="text-[11px] text-amber-100/85">
-                    Pendientes/inciertos: lotes=
+                    Pendientes/inciertos: actividad=
+                    {pendingCriticalWork.pendingActivityEvents +
+                      pendingCriticalWork.uncertainActivityEvents +
+                      pendingCriticalWork.conflictActivityEvents}
+                    , lotes=
                     {pendingCriticalWork.pendingTelemetryBatches +
                       pendingCriticalWork.inFlightTelemetryBatches}
                     , búfer={pendingCriticalWork.bufferedTelemetrySamples}, ensayos=

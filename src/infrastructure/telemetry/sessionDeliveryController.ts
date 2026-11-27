@@ -8,6 +8,14 @@ import {
   type QueuedTrialEntry,
   type TrialAnalyticsQueueSummary,
 } from './trialAnalyticsQueue.ts';
+import {
+  ClinicalActivityQueue,
+  type ClinicalActivityEntryState,
+  type ClinicalActivityQueueSummary,
+  type ClinicalActivitySendFn,
+  type ClinicalProgressReadFn,
+  type RetainedClinicalActivityEntry,
+} from './clinicalActivityQueue.ts';
 import { ApiError, createUuid } from '../api/httpClient.ts';
 import type { AnyTrialBody } from '../api/analyticsApi.ts';
 import type {
@@ -15,16 +23,26 @@ import type {
   AnalyticsTrialReceipt,
 } from '../api/contracts/analytics.contracts.ts';
 import type {
+  PatientActivityEventBody,
   PatientSessionCompletionBody,
   PatientSessionProgressResponse,
   PatientTherapySessionStatus,
 } from '../api/contracts/clinical.contracts.ts';
+
+export type {
+  ClinicalActivityEntryState,
+  ClinicalActivityQueueSummary,
+  ClinicalActivitySendFn,
+  ClinicalProgressReadFn,
+  RetainedClinicalActivityEntry,
+};
 
 export const DEFAULT_CLINICAL_REQUEST_TIMEOUT_MS = 15_000;
 export const DEFAULT_CLOSURE_GATE_TIMEOUT_MS = 15_000;
 
 export type ClinicalDeadlineStage =
   | 'WAIT_EVENTS'
+  | 'SEND_ACTIVITY'
   | 'DELIVERY_GATE'
   | 'GET_PROGRESS'
   | 'COMPLETE_SESSION'
@@ -70,6 +88,10 @@ export interface SyncSessionOptions {
 export interface PendingCriticalWorkSnapshot {
   sessionId: string | null;
   accountKey: string | null;
+  pendingActivityEvents: number;
+  uncertainActivityEvents: number;
+  conflictActivityEvents: number;
+  inFlightActivityEvents: number;
   pendingTelemetryBatches: number;
   inFlightTelemetryBatches: number;
   bufferedTelemetrySamples: number;
@@ -103,6 +125,7 @@ export type ClinicalClosureDetailKind =
   | 'SAVING'
   | 'PENDING_SYNC'
   | 'PROGRESS_UNAVAILABLE'
+  | 'TARGET_NOT_REACHED'
   | 'UNCERTAIN_COMPLETION'
   | 'CONFLICT'
   | 'AUTH_ERROR'
@@ -126,6 +149,9 @@ export type ClinicalClosureErrorReason =
   | 'PROGRESS_UNAVAILABLE'
   | 'PROGRESS_TIMEOUT'
   | 'PROGRESS_SESSION_MISMATCH'
+  | 'ACTIVITY_CONFLICT'
+  | 'TARGET_NOT_REACHED'
+  | 'SESSION_EXPIRED'
   | 'COMPLETION_UNCERTAIN'
   | 'COMPLETION_TIMEOUT'
   | 'COMPLETION_CONFLICT'
@@ -199,6 +225,11 @@ export type ClinicalClosureOutcome =
 
 export interface SessionSyncSummary {
   sessionId: string | null;
+  confirmedActivityEvents: number;
+  pendingActivityEvents: number;
+  uncertainActivityEvents: number;
+  conflictActivityEvents: number;
+  inFlightActivityEvents: number;
   confirmedTrials: number;
   pendingTrials: number;
   uncertainTrials: number;
@@ -235,6 +266,17 @@ export interface SessionDeliveryControllerOptions {
     slug: AnalyticsExerciseSlug,
     body: AnyTrialBody
   ) => Promise<AnalyticsTrialReceipt>;
+  sendActivityEvent?: ClinicalActivitySendFn;
+  getSessionProgress?: ClinicalProgressReadFn;
+  onActivityEventAcknowledged?: (
+    entry: RetainedClinicalActivityEntry,
+    progress: PatientSessionProgressResponse,
+    context: SessionLifecycleContext
+  ) => void;
+  onActivityProgressObserved?: (
+    progress: PatientSessionProgressResponse,
+    context: SessionLifecycleContext
+  ) => void;
   onSyncSummaryChange?: (summary: SessionSyncSummary) => void;
   onPendingWorkDiscarded?: (notice: DiscardedSessionWorkNotice) => void;
   clinicalRequestTimeoutMs?: number;
@@ -379,9 +421,11 @@ export class SessionDeliveryController {
   private lastClosureDetail: ClinicalClosureStateDetail | null = null;
   private lastDiscardedWorkNotice: DiscardedSessionWorkNotice | null = null;
   private isMouseFallback = false;
+  private activityQueue: ClinicalActivityQueue | null = null;
   private telemetryQueue: TelemetryBatchQueue | null = null;
   private trialQueue: TrialAnalyticsQueue | null = null;
-  private lastWarningSource: 'trial' | 'telemetry' | null = null;
+  private lastWarningSource: 'activity' | 'trial' | 'telemetry' | null = null;
+  private lastObservedActivityWarning: string | null = null;
   private lastObservedTrialWarning: string | null = null;
   private lastObservedTelemetryWarning: string | null = null;
 
@@ -476,17 +520,21 @@ export class SessionDeliveryController {
     this.cachedProgressGeneration = null;
     this.lastClosureDetail = null;
 
+    this.activityQueue?.dispose();
     this.telemetryQueue?.dispose();
     this.trialQueue?.dispose();
+    this.activityQueue = null;
     this.telemetryQueue = null;
     this.trialQueue = null;
 
     this.activeSessionId = sessionId;
     this.activeAccountKey = nextAccountKey;
-    this.completionKey =
+    const nextCompletionKey =
       sessionId !== null ? (this.options.uuid ?? createUuid)() : null;
+    this.completionKey = nextCompletionKey;
     this.isMouseFallback = options.initialMouseFallback ?? false;
     this.lastWarningSource = null;
+    this.lastObservedActivityWarning = null;
     this.lastObservedTrialWarning = null;
     this.lastObservedTelemetryWarning = null;
 
@@ -502,6 +550,54 @@ export class SessionDeliveryController {
 
     const capturedSessionId = sessionId;
     const capturedAccountKey = nextAccountKey;
+    const capturedContext: SessionLifecycleContext = Object.freeze({
+      sessionId: capturedSessionId,
+      accountKey: capturedAccountKey,
+      completionKey: nextCompletionKey!,
+      generation: capturedGeneration,
+    });
+
+    const activityQueue = this.options.sendActivityEvent
+      ? new ClinicalActivityQueue({
+          therapySessionId: capturedSessionId,
+          accountKey: capturedAccountKey,
+          generation: capturedGeneration,
+          requestTimeoutMs: this.clinicalRequestTimeoutMs,
+          sendActivityEvent: this.options.sendActivityEvent,
+          getSessionProgress: this.options.getSessionProgress,
+          onStateChange: (summary) => {
+            if (
+              this.activeSessionId !== capturedSessionId ||
+              this.activeAccountKey !== capturedAccountKey ||
+              this.lifecycleGeneration !== capturedGeneration ||
+              this.activityQueue !== activityQueue
+            ) {
+              return;
+            }
+            if (summary.lastWarning !== this.lastObservedActivityWarning) {
+              this.lastObservedActivityWarning = summary.lastWarning;
+              if (summary.lastWarning !== null) {
+                this.lastWarningSource = 'activity';
+              }
+            }
+            this.notifySyncSummaryChange();
+          },
+          onEventAcknowledged: (entry, progress) => {
+            if (!this.isLifecycleAdmitted(capturedContext) || this.activityQueue !== activityQueue) {
+              return;
+            }
+            this.setCachedProgress(progress, capturedContext);
+            this.options.onActivityEventAcknowledged?.(entry, progress, capturedContext);
+          },
+          onProgressObserved: (progress) => {
+            if (!this.isLifecycleAdmitted(capturedContext) || this.activityQueue !== activityQueue) {
+              return;
+            }
+            this.setCachedProgress(progress, capturedContext);
+            this.options.onActivityProgressObserved?.(progress, capturedContext);
+          },
+        })
+      : null;
 
     const telemetryQueue = new TelemetryBatchQueue({
       therapySessionId: capturedSessionId,
@@ -558,6 +654,7 @@ export class SessionDeliveryController {
       },
     });
 
+    this.activityQueue = activityQueue;
     this.telemetryQueue = telemetryQueue;
     this.trialQueue = trialQueue;
     this.notifySyncSummaryChange();
@@ -670,12 +767,25 @@ export class SessionDeliveryController {
       this.uncertainClosure !== null &&
       this.uncertainClosure.context.generation === this.lifecycleGeneration &&
       !this.uncertainClosure.receiptApplied;
+    const hasUnresolvedActivity =
+      summary.pendingActivityEvents +
+        summary.uncertainActivityEvents +
+        summary.conflictActivityEvents +
+        summary.inFlightActivityEvents >
+      0;
     const hasPendingCriticalWork =
-      summary.hasPendingOrUncertainDelivery || hasActiveClosure || hasUncertainClosure;
+      summary.hasPendingOrUncertainDelivery ||
+      hasUnresolvedActivity ||
+      hasActiveClosure ||
+      hasUncertainClosure;
 
     return {
       sessionId: this.activeSessionId,
       accountKey: this.activeAccountKey,
+      pendingActivityEvents: summary.pendingActivityEvents,
+      uncertainActivityEvents: summary.uncertainActivityEvents,
+      conflictActivityEvents: summary.conflictActivityEvents,
+      inFlightActivityEvents: summary.inFlightActivityEvents,
       pendingTelemetryBatches: summary.pendingTelemetryBatches,
       inFlightTelemetryBatches: summary.inFlightTelemetryBatches,
       bufferedTelemetrySamples: summary.bufferedTelemetrySamples,
@@ -691,6 +801,49 @@ export class SessionDeliveryController {
 
   hasPendingCriticalWork(): boolean {
     return this.getPendingCriticalWorkSnapshot().hasPendingCriticalWork;
+  }
+
+  seedActivitySequence(nextSequence: number): boolean {
+    if (!this.activityQueue) {
+      return false;
+    }
+    return this.activityQueue.seedNextSequence(nextSequence);
+  }
+
+  enqueueActivityEvent(
+    buildOrBody:
+      | PatientActivityEventBody
+      | ((sequence: number) => PatientActivityEventBody)
+  ): {
+    entry: RetainedClinicalActivityEntry;
+    settlement: Promise<PatientSessionProgressResponse | null>;
+  } | null {
+    if (!this.activityQueue) {
+      return null;
+    }
+    return this.activityQueue.enqueue(buildOrBody);
+  }
+
+  retryPendingActivity(): Promise<PatientSessionProgressResponse | null> {
+    if (!this.activityQueue) {
+      return Promise.resolve(null);
+    }
+    return this.activityQueue.retryPending();
+  }
+
+  waitForCurrentActivityDrain(): Promise<void> {
+    if (!this.activityQueue) {
+      return Promise.resolve();
+    }
+    return this.activityQueue.waitForCurrentDrain();
+  }
+
+  hasUnresolvedClinicalActivity(): boolean {
+    return Boolean(this.activityQueue?.getSummary().hasUnresolved);
+  }
+
+  getActivityQueue(): ClinicalActivityQueue | null {
+    return this.activityQueue;
   }
 
   /**
@@ -780,10 +933,18 @@ export class SessionDeliveryController {
    */
   closeClinicalSession(params: {
     forceCloseWithoutSync: boolean;
+    closeIntent?: 'TARGET_REACHED' | 'USER_EXIT';
+    retryUncertainActivity?: boolean;
     apis: ClinicalClosureApis;
     adapter: ClinicalClosureStateAdapter;
   }): Promise<ClinicalClosureOutcome> {
-    const { forceCloseWithoutSync, apis, adapter } = params;
+    const {
+      forceCloseWithoutSync,
+      closeIntent,
+      retryUncertainActivity = false,
+      apis,
+      adapter,
+    } = params;
     const context = this.getLifecycleContext();
     if (!context || !adapter.isMounted()) {
       return Promise.resolve({ status: 'STALE_IGNORED' });
@@ -844,17 +1005,43 @@ export class SessionDeliveryController {
             'DELIVERY_GATE',
             this.closureGateTimeoutMs,
             async () => {
-              const [, result] = await Promise.all([
+              const targetSessionId = this.activeSessionId;
+              const targetAccountKey = this.activeAccountKey;
+              const targetGeneration = this.lifecycleGeneration;
+
+              await Promise.all([
                 adapter.waitForActivityEvents().catch(() => undefined),
-                this.prepareClosure(forceCloseWithoutSync),
+                (retryUncertainActivity
+                  ? this.retryPendingActivity()
+                  : this.waitForCurrentActivityDrain()
+                ).catch(() => null),
+                this.drainPendingTrials(2).catch(() => null),
+                this.flushTelemetry().catch(() => undefined),
               ]);
-              return result;
+
+              const summary = this.getSyncSummary();
+              if (
+                targetSessionId !== this.activeSessionId ||
+                targetAccountKey !== this.activeAccountKey ||
+                targetGeneration !== this.lifecycleGeneration
+              ) {
+                return {
+                  allowedToClose: false,
+                  reason: 'PENDING_SYNC' as const,
+                  summary,
+                };
+              }
+
+              return this.evaluateGateFromSummary(forceCloseWithoutSync, summary);
             }
           );
           gate = await gateWait.promise;
         } catch (gateErr) {
           if (!isAdmitted()) {
             return { status: 'STALE_IGNORED' };
+          }
+          if (gateErr instanceof ClinicalRequestTimeoutError) {
+            this.activityQueue?.abortInFlightAsUncertain(gateErr.message);
           }
           const summary = this.getSyncSummary();
           adapter.setSyncSummary(summary);
@@ -863,7 +1050,7 @@ export class SessionDeliveryController {
               if (summary.hasPendingOrUncertainDelivery) {
                 adapter.setCompletionState('PENDING_SYNC');
                 const msg =
-                  'Tiempo de espera agotado al sincronizar ensayos/telemetría pendientes. Puedes reintentar o forzar el cierre clínico.';
+                  'Tiempo de espera agotado al sincronizar eventos clínicos, ensayos o telemetría pendientes. Puedes reintentar conservando la identidad exacta.';
                 adapter.setBackendWarning(msg);
                 publishDetail({
                   kind: 'PENDING_SYNC',
@@ -920,9 +1107,70 @@ export class SessionDeliveryController {
 
         adapter.setSyncSummary(gate.summary);
 
+        // POST-REP-01: if a Clinical activity event hit 409 Conflict, halt automatic
+        // progression, read fresh progress for the original session, and surface conflict
+        // without fabricating credit or auto-converting a normal completion into ABANDONED.
+        if (
+          !forceCloseWithoutSync &&
+          gate.summary.conflictActivityEvents > 0 &&
+          closeIntent !== 'USER_EXIT'
+        ) {
+          let conflictObservedStatus: PatientTherapySessionStatus | null = null;
+          try {
+            const refreshAttempt = this.awaitWithDeadline(
+              'RECOVERY_PROGRESS',
+              this.clinicalRequestTimeoutMs,
+              (signal) => apis.getSessionProgress(context.sessionId, { signal })
+            );
+            const refreshed = await refreshAttempt.promise;
+            if (isAdmitted() && isMatchingSessionProgress(refreshed, context.sessionId)) {
+              conflictObservedStatus = refreshed.status;
+              this.setCachedProgress(refreshed, context);
+              adapter.setCachedProgress(refreshed);
+              adapter.onSessionProgressUpdate?.(refreshed);
+            }
+          } catch {
+            if (!isAdmitted()) {
+              return { status: 'STALE_IGNORED' };
+            }
+          }
+
+          if (!isAdmitted()) {
+            return { status: 'STALE_IGNORED' };
+          }
+
+          const msg = `Conflicto (409) en evento de actividad clínica pendiente${
+            conflictObservedStatus ? ` · Estado en servidor: ${conflictObservedStatus}` : ''
+          }. Se detuvo la progresión automática sin renumerar el evento ni fabricar completitud.`;
+          adapter.setCompletionState('ERROR');
+          adapter.setBackendWarning(msg);
+          publishDetail({
+            kind: 'CONFLICT',
+            sessionId: context.sessionId,
+            action: null,
+            observedServerStatus: conflictObservedStatus,
+            receiptAcknowledged: false,
+            canRetryProgressRead: true,
+            canRecoverWithSameKey: false,
+            hasRetainedCompletionIdentity: false,
+            message: msg,
+          });
+          return {
+            status: 'ERROR',
+            errorMessage: msg,
+            reason: 'ACTIVITY_CONFLICT',
+            uncertain: false,
+            observedServerStatus: conflictObservedStatus,
+            receiptAcknowledged: false,
+            gate: { allowedToClose: false, reason: 'PENDING_SYNC', summary: gate.summary },
+          };
+        }
+
         if (!gate.allowedToClose) {
           const msg =
-            'Hay ensayos o lotes de telemetría pendientes o con estado incierto antes de cerrar la sesión clínica.';
+            gate.summary.pendingActivityEvents + gate.summary.uncertainActivityEvents > 0
+              ? 'Hay eventos de actividad clínica sin confirmar antes de cerrar la sesión. Reintenta para preservar las repeticiones.'
+              : 'Hay ensayos o lotes de telemetría pendientes o con estado incierto antes de cerrar la sesión clínica.';
           adapter.setCompletionState('PENDING_SYNC');
           adapter.setBackendWarning(msg);
           publishDetail({
@@ -1021,6 +1269,40 @@ export class SessionDeliveryController {
         adapter.setCachedProgress(fetchedProgress);
 
         if (fetchedProgress.status !== 'ACTIVE') {
+          if (
+            (fetchedProgress.status === 'FAILED_TECHNICAL' ||
+              fetchedProgress.status === 'CANCELLED') &&
+            closeIntent === 'TARGET_REACHED'
+          ) {
+            if (!isAdmitted()) {
+              return { status: 'STALE_IGNORED' };
+            }
+            const msg = `La sesión ya figuraba cerrada/expirada en el servidor (${fetchedProgress.status}) antes de confirmar el cierre; no se fabricó completitud.`;
+            adapter.setCompletionState('ERROR');
+            adapter.setBackendWarning(msg);
+            publishDetail({
+              kind: 'OBSERVED_SERVER_STATE',
+              sessionId: context.sessionId,
+              action: null,
+              observedServerStatus: fetchedProgress.status,
+              receiptAcknowledged: false,
+              canRetryProgressRead: false,
+              canRecoverWithSameKey: false,
+              hasRetainedCompletionIdentity: false,
+              message: msg,
+            });
+            adapter.onSessionProgressUpdate?.(fetchedProgress);
+            return {
+              status: 'ERROR',
+              errorMessage: msg,
+              reason: 'SESSION_EXPIRED',
+              uncertain: false,
+              observedServerStatus: fetchedProgress.status,
+              receiptAcknowledged: false,
+              gate,
+            };
+          }
+
           const mapped: 'FINISHED' | 'ABANDONED' =
             fetchedProgress.status === 'COMPLETED' ? 'FINISHED' : 'ABANDONED';
           if (!isAdmitted()) {
@@ -1045,6 +1327,47 @@ export class SessionDeliveryController {
             progress: fetchedProgress,
             gate,
             receiptAcknowledged: false,
+          };
+        }
+
+        // POST-REP-01 Rule 6: Never automatically convert `targetReached === false`
+        // into `ABANDONED` when closure was initiated for normal target completion
+        // (e.g. after a >15s RESUME_REQUIRED gap discarded an uncredited repetition).
+        if (!fetchedProgress.targetReached && closeIntent === 'TARGET_REACHED') {
+          if (!isAdmitted()) {
+            return { status: 'STALE_IGNORED' };
+          }
+          adapter.onSessionProgressUpdate?.(fetchedProgress);
+          const progressText =
+            fetchedProgress.criterion === 'REPETITIONS'
+              ? `${fetchedProgress.completedRepetitions} / ${fetchedProgress.target} repeticiones acreditadas`
+              : `${Math.round(fetchedProgress.activeMilliseconds / 1000)} / ${fetchedProgress.target} s activos acreditados`;
+          const gapHint =
+            fetchedProgress.activityState === 'RESUME_REQUIRED'
+              ? ' tras pausa por inactividad (>15s, RESUME_REQUIRED)'
+              : '';
+          const msg = `La meta técnica aún no figura alcanzada en el servidor (${progressText}${gapHint}). No se convirtió automáticamente en ABANDONED; puedes reanudar el ejercicio o abandonar explícitamente.`;
+          adapter.setCompletionState('ERROR');
+          adapter.setBackendWarning(msg);
+          publishDetail({
+            kind: 'TARGET_NOT_REACHED',
+            sessionId: context.sessionId,
+            action: null,
+            observedServerStatus: fetchedProgress.status,
+            receiptAcknowledged: false,
+            canRetryProgressRead: true,
+            canRecoverWithSameKey: false,
+            hasRetainedCompletionIdentity: false,
+            message: msg,
+          });
+          return {
+            status: 'ERROR',
+            errorMessage: msg,
+            reason: 'TARGET_NOT_REACHED',
+            uncertain: false,
+            observedServerStatus: fetchedProgress.status,
+            receiptAcknowledged: false,
+            gate,
           };
         }
 
@@ -1810,8 +2133,15 @@ export class SessionDeliveryController {
   }
 
   getSyncSummary(): SessionSyncSummary {
+    const activitySummary = this.activityQueue?.getSummary();
     const trialSummary = this.trialQueue?.getSummary();
     const telemetrySnap = this.telemetryQueue?.getSnapshot();
+
+    const confirmedActivityEvents = activitySummary?.confirmedCount ?? 0;
+    const pendingActivityEvents = activitySummary?.pendingCount ?? 0;
+    const uncertainActivityEvents = activitySummary?.uncertainCount ?? 0;
+    const conflictActivityEvents = activitySummary?.conflictCount ?? 0;
+    const inFlightActivityEvents = activitySummary?.inFlightCount ?? 0;
 
     const confirmedTrials = trialSummary?.confirmedCount ?? 0;
     const pendingTrials = trialSummary?.pendingCount ?? 0;
@@ -1830,6 +2160,9 @@ export class SessionDeliveryController {
       telemetrySnap?.droppedOverflowCount ?? 0;
 
     const hasPendingOrUncertainDelivery =
+      pendingActivityEvents > 0 ||
+      uncertainActivityEvents > 0 ||
+      inFlightActivityEvents > 0 ||
       pendingTrials > 0 ||
       uncertainTrials > 0 ||
       inFlightTrials > 0 ||
@@ -1838,6 +2171,7 @@ export class SessionDeliveryController {
       bufferedTelemetrySamples > 0;
 
     const hasPermanentDataLoss =
+      conflictActivityEvents > 0 ||
       failedPermanentTrials > 0 ||
       permanentRejectedTelemetryBatches > 0 ||
       droppedOverflowTelemetryBatches > 0;
@@ -1845,18 +2179,27 @@ export class SessionDeliveryController {
     const isSyncComplete =
       !hasPendingOrUncertainDelivery && !hasPermanentDataLoss;
 
+    const activityWarning = activitySummary?.lastWarning ?? null;
     const trialWarning = trialSummary?.lastWarning ?? null;
     const telemetryWarning = telemetrySnap?.lastWarning ?? null;
     let lastWarning: string | null = null;
-    if (trialWarning !== null && telemetryWarning !== null) {
-      lastWarning =
-        this.lastWarningSource === 'telemetry' ? telemetryWarning : trialWarning;
+    if (this.lastWarningSource === 'activity' && activityWarning !== null) {
+      lastWarning = activityWarning;
+    } else if (this.lastWarningSource === 'telemetry' && telemetryWarning !== null) {
+      lastWarning = telemetryWarning;
+    } else if (this.lastWarningSource === 'trial' && trialWarning !== null) {
+      lastWarning = trialWarning;
     } else {
-      lastWarning = trialWarning ?? telemetryWarning;
+      lastWarning = activityWarning ?? trialWarning ?? telemetryWarning;
     }
 
     return {
       sessionId: this.activeSessionId,
+      confirmedActivityEvents,
+      pendingActivityEvents,
+      uncertainActivityEvents,
+      conflictActivityEvents,
+      inFlightActivityEvents,
       confirmedTrials,
       pendingTrials,
       uncertainTrials,
@@ -1908,8 +2251,10 @@ export class SessionDeliveryController {
     this.cachedProgress = null;
     this.cachedProgressGeneration = null;
     this.lastClosureDetail = null;
+    this.activityQueue?.dispose();
     this.telemetryQueue?.dispose();
     this.trialQueue?.dispose();
+    this.activityQueue = null;
     this.telemetryQueue = null;
     this.trialQueue = null;
     this.activeSessionId = null;
@@ -1917,6 +2262,7 @@ export class SessionDeliveryController {
     this.completionKey = null;
     this.isMouseFallback = false;
     this.lastWarningSource = null;
+    this.lastObservedActivityWarning = null;
     this.lastObservedTrialWarning = null;
     this.lastObservedTelemetryWarning = null;
   }
